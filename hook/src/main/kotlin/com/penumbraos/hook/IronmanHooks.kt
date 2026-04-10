@@ -1,19 +1,34 @@
 package com.penumbraos.hook
 
+import android.app.Application
+import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
+import java.security.cert.X509Certificate
 
 /**
- * Debug hooks for ironman's gRPC infrastructure.
+ * Hooks for ironman's gRPC infrastructure.
  *
- * First iteration: discovery + logging only. Does not modify any behavior.
- * Enumerates methods on ChannelFactory classes and hooks all declared methods
- * to log invocations.
+ * Active interception: redirects all gRPC traffic to a local mock server
+ * by hooking ChannelFactory.getGatewayUri() to return our server address.
+ * Using a non-443 port triggers usePlaintext() in ChannelFactory — no TLS needed.
+ *
+ * Also patches credential manager methods that crash with NPE when device
+ * certificates are missing from the hardware keystore.
+ *
+ * Also hooks all other ChannelFactory methods for debug logging.
  */
 object IronmanHooks {
 
     private const val TAG = "PenumbraHook"
+
+    /**
+     * Mock server address. The non-443 port triggers usePlaintext() in
+     * ChannelFactory.newChannel(), bypassing TLS/mTLS entirely.
+     */
+    private const val MOCK_SERVER_URI = "192.168.1.125:9090"
 
     private val CHANNEL_FACTORY_CLASSES = listOf(
         "humaneinternal.system.network.ChannelFactory",
@@ -21,13 +36,89 @@ object IronmanHooks {
     )
 
     fun install(cl: ClassLoader) {
-        Log.i(TAG, "Installing ironman debug hooks...")
+        Log.i(TAG, "Installing ironman hooks...")
+        Log.i(TAG, "  Mock server: $MOCK_SERVER_URI")
+
+        // Credential hooks must be installed first — without these, ironman
+        // crash-loops before ChannelFactory hooks ever get a chance to run.
+        hookCredentialManager(cl)
 
         for (className in CHANNEL_FACTORY_CLASSES) {
             hookChannelFactory(cl, className)
         }
 
-        Log.i(TAG, "Ironman debug hooks installed")
+        // Fix provisioning state: set baseline mode to NORMAL and ensure
+        // DUC_PROVISIONED flag is set. Needs Application context, so we
+        // hook Application.onCreate() and run once.
+        hookApplicationOnCreate(cl)
+
+        Log.i(TAG, "Ironman hooks installed")
+    }
+
+    /**
+     * Patch AbstractCredentialKeyManager to survive missing device credentials.
+     *
+     * The device's hardware keystore (TEE) may have no provisioned cert chain
+     * for the "DeviceUserCreds" alias. When this happens:
+     *
+     * - getCertificateChain(): HumaneCertificate.getCertificateChain() returns null,
+     *   and the for-each loop over null throws NPE. This crashes newChannel() in
+     *   the TLS path, AND getLeafCertificate() -> addCertHeader() in the plaintext
+     *   path (called by NetworkManager.newServiceStub()).
+     *
+     * - getPrivateKey(): if getKeyPair() throws, the catch block sets keyPair=null,
+     *   then keyPair.getPrivate() NPEs. Hit during SSLContext.init() in the TLS path.
+     *
+     * We suppress both NPEs so ironman can proceed to the plaintext/redirect path.
+     */
+    private fun hookCredentialManager(cl: ClassLoader) {
+        val className = "humaneinternal.system.credentials.AbstractCredentialKeyManager"
+        val clazz = try {
+            cl.loadClass(className)
+        } catch (e: ClassNotFoundException) {
+            Log.w(TAG, "  $className not found, skipping credential hooks")
+            return
+        }
+
+        // getCertificateChain(String) -> X509Certificate[]
+        // Suppress NPE from for-each over null cert chain; return empty array
+        // so callers like getLeafCertificate() get Optional.empty() instead of crashing.
+        try {
+            val method = clazz.getDeclaredMethod("getCertificateChain", String::class.java)
+            method.isAccessible = true
+            XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    if (param.throwable is NullPointerException) {
+                        param.throwable = null
+                        param.result = emptyArray<X509Certificate>()
+                        Log.w(TAG, "getCertificateChain() NPE suppressed — device cert chain missing, returning empty array")
+                    }
+                }
+            })
+            Log.i(TAG, "  Hooked $className.getCertificateChain()")
+        } catch (t: Throwable) {
+            Log.e(TAG, "  Failed to hook getCertificateChain: ${t.message}")
+        }
+
+        // getPrivateKey(String) -> PrivateKey
+        // Suppress NPE from keyPair.getPrivate() when keyPair is null after catch;
+        // return null so SSLContext silently skips client cert presentation.
+        try {
+            val method = clazz.getDeclaredMethod("getPrivateKey", String::class.java)
+            method.isAccessible = true
+            XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    if (param.throwable is NullPointerException) {
+                        param.throwable = null
+                        param.result = null
+                        Log.w(TAG, "getPrivateKey() NPE suppressed — device keypair missing, returning null")
+                    }
+                }
+            })
+            Log.i(TAG, "  Hooked $className.getPrivateKey()")
+        } catch (t: Throwable) {
+            Log.e(TAG, "  Failed to hook getPrivateKey: ${t.message}")
+        }
     }
 
     private fun hookChannelFactory(cl: ClassLoader, className: String) {
@@ -46,7 +137,7 @@ object IronmanHooks {
             Log.i(TAG, "    ${m.name}($params) -> ${m.returnType.simpleName}")
         }
 
-        // Hook every declared method for full visibility
+        // Hook every declared method for full visibility + active interception
         var hooked = 0
         for (method in methods) {
             try {
@@ -64,6 +155,14 @@ object IronmanHooks {
                     }
 
                     override fun afterHookedMethod(param: MethodHookParam) {
+                        // Active interception: redirect getGatewayUri() to mock server
+                        if (methodName == "getGatewayUri" && param.throwable == null) {
+                            val original = param.result
+                            param.result = MOCK_SERVER_URI
+                            Log.i(TAG, "<<< $className.$methodName() REDIRECTED: $original -> $MOCK_SERVER_URI")
+                            return
+                        }
+
                         if (param.throwable != null) {
                             Log.i(TAG, "<<< $className.$methodName() threw: ${param.throwable}")
                         } else {
@@ -77,6 +176,187 @@ object IronmanHooks {
             }
         }
         Log.i(TAG, "  Hooked $hooked/${methods.size} methods on $className")
+    }
+
+    /**
+     * Hook Application.onCreate() to run provisioning fix once we have a Context.
+     *
+     * instantiateApplication() runs before attachBaseContext(), so we can't
+     * access ContentResolver there. onCreate() runs after attach, giving us
+     * full Context access.
+     *
+     * Only runs in the main process — the :voiceinteractor process doesn't
+     * need provisioning fixes and shouldn't call setBaselineMode().
+     */
+    private fun hookApplicationOnCreate(cl: ClassLoader) {
+        try {
+            val appClass = cl.loadClass("humaneinternal.system.MainApplication")
+            val onCreateMethod = appClass.getDeclaredMethod("onCreate")
+            onCreateMethod.isAccessible = true
+            XposedBridge.hookMethod(onCreateMethod, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val app = param.thisObject as Application
+                    val processName = app.applicationInfo?.processName ?: ""
+                    val myProcess = Application.getProcessName() ?: ""
+                    Log.i(TAG, "Application.onCreate() — process=$myProcess")
+
+                    // Only run in main process (not :voiceinteractor)
+                    if (myProcess.contains(":")) {
+                        Log.i(TAG, "  Skipping provisioning fix in subprocess: $myProcess")
+                        return
+                    }
+
+                    try {
+                        fixProvisioningState(app, cl)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Provisioning fix failed (non-fatal)", t)
+                    }
+                }
+            })
+            Log.i(TAG, "  Hooked MainApplication.onCreate() for provisioning fix")
+        } catch (t: Throwable) {
+            Log.e(TAG, "  Failed to hook MainApplication.onCreate(): ${t.message}")
+            // Fallback: try hooking android.app.Application.onCreate() directly
+            try {
+                val appClass = Application::class.java
+                val onCreateMethod = appClass.getDeclaredMethod("onCreate")
+                XposedBridge.hookMethod(onCreateMethod, object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val app = param.thisObject as? Application ?: return
+                        val myProcess = Application.getProcessName() ?: ""
+                        if (myProcess.contains(":")) return
+
+                        try {
+                            fixProvisioningState(app, cl)
+                        } catch (t: Throwable) {
+                            Log.e(TAG, "Provisioning fix failed (non-fatal)", t)
+                        }
+                    }
+                })
+                Log.i(TAG, "  Hooked Application.onCreate() (fallback) for provisioning fix")
+            } catch (t2: Throwable) {
+                Log.e(TAG, "  Failed to hook Application.onCreate() fallback: ${t2.message}")
+            }
+        }
+    }
+
+    /**
+     * Fix the provisioning state so the device accepts voice commands.
+     *
+     * Two fixes:
+     *
+     * 1. Set SystemMode baseline to NORMAL (0) via ISystemModeService Binder IPC.
+     *    The device is stuck at OOBE (1) because onboarding was skipped.
+     *    SystemModeService persists this to SharedPreferences and broadcasts
+     *    the mode change via IModeCallback — TouchpadActionManager picks it up
+     *    immediately, enabling gesture handlers for NORMAL mode.
+     *
+     * 2. Ensure Settings.Global "humane.settings.global.DUC_PROVISIONED" = 1.
+     *    SystemUI's TouchpadEventReceiver watches this via ContentObserver and
+     *    suppresses ALL gestures when it's 0. Setting it to 1 unblocks gestures
+     *    in SystemUI immediately (the observer fires on change).
+     */
+    private fun fixProvisioningState(app: Application, cl: ClassLoader) {
+        Log.i(TAG, "=== Fixing provisioning state ===")
+
+        // --- Fix 1: Set baseline mode to NORMAL via Binder IPC ---
+        fixBaselineMode(cl)
+
+        // --- Fix 2: Ensure DUC_PROVISIONED = 1 ---
+        fixDucProvisioned(app)
+
+        Log.i(TAG, "=== Provisioning fix complete ===")
+    }
+
+    /**
+     * Call ISystemModeService.setBaselineMode(0) via reflection on the AIDL proxy.
+     *
+     * The AIDL-generated classes are in ironman's classloader:
+     *   - ISystemModeService.Stub.asInterface(binder) returns the proxy
+     *   - proxy.setBaselineMode((byte) 0) sets NORMAL mode
+     *
+     * setBaselineMode() in SystemModeService (system_server) will:
+     *   1. Validate mode is baseline (0 or 1)
+     *   2. Write to SharedPreferences: putInt("baselineMode", 0)
+     *   3. If current mode != 0, call resetMode() which transitions to NORMAL
+     *   4. resetMode() calls __setModeInternal() which broadcasts via IModeCallback
+     *   5. TouchpadActionManager receives onModeSet() and updates mMode to 0
+     */
+    private fun fixBaselineMode(cl: ClassLoader) {
+        try {
+            // Get the SystemModeService binder
+            val serviceManagerClass = Class.forName("android.os.ServiceManager")
+            val getServiceMethod = serviceManagerClass.getMethod("getService", String::class.java)
+            val binder = getServiceMethod.invoke(null, "humane.service.SystemModeService") as? IBinder
+
+            if (binder == null) {
+                Log.w(TAG, "  SystemModeService binder not found — service may not be ready yet")
+                return
+            }
+
+            // Load ISystemModeService.Stub and call asInterface()
+            val stubClass = cl.loadClass("humane.sysmode.ISystemModeService\$Stub")
+            val asInterfaceMethod = stubClass.getMethod("asInterface", IBinder::class.java)
+            val service = asInterfaceMethod.invoke(null, binder)
+                ?: run {
+                    Log.w(TAG, "  ISystemModeService.Stub.asInterface() returned null")
+                    return
+                }
+
+            // Check current baseline mode first (idempotent)
+            val getBaselineMethod = service.javaClass.getMethod("getBaselineMode")
+            val currentBaseline = getBaselineMethod.invoke(service) as Byte
+
+            Log.i(TAG, "  Current baseline mode: $currentBaseline")
+
+            if (currentBaseline == 0.toByte()) {
+                Log.i(TAG, "  Baseline already NORMAL (0), no change needed")
+                return
+            }
+
+            // Set baseline to NORMAL (0)
+            val setBaselineMethod = service.javaClass.getMethod("setBaselineMode", Byte::class.javaPrimitiveType)
+            setBaselineMethod.invoke(service, 0.toByte())
+            Log.i(TAG, "  setBaselineMode(0) — SUCCESS — mode transitioned from $currentBaseline to NORMAL")
+
+        } catch (t: Throwable) {
+            Log.e(TAG, "  setBaselineMode failed: ${t.javaClass.simpleName}: ${t.message}")
+            // Non-fatal — device continues with whatever mode it had
+        }
+    }
+
+    /**
+     * Ensure DUC_PROVISIONED is set to 1 in Settings.Global.
+     *
+     * This is the flag that controls:
+     * - SystemUI TouchpadEventReceiver: mOnboardingComplete (enables all gestures)
+     * - PersistenceService: bindCentralIfProvisioned() (starts CentralService)
+     * - LaserSoundFeedbackManager: switches from PROACTIVE to SUBTLE guidance
+     *
+     * The ContentObserver in SystemUI fires immediately on change.
+     */
+    private fun fixDucProvisioned(app: Application) {
+        try {
+            val resolver = app.contentResolver
+            val key = "humane.settings.global.DUC_PROVISIONED"
+            val current = Settings.Global.getInt(resolver, key, 0)
+
+            Log.i(TAG, "  Current DUC_PROVISIONED: $current")
+
+            if (current != 0) {
+                Log.i(TAG, "  DUC_PROVISIONED already set ($current), no change needed")
+                return
+            }
+
+            val success = Settings.Global.putInt(resolver, key, 1)
+            if (success) {
+                Log.i(TAG, "  DUC_PROVISIONED set to 1 — SUCCESS")
+            } else {
+                Log.w(TAG, "  DUC_PROVISIONED putInt returned false — may lack permission")
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "  DUC_PROVISIONED fix failed: ${t.javaClass.simpleName}: ${t.message}")
+        }
     }
 
     /**

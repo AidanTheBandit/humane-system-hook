@@ -1,0 +1,148 @@
+// Reconstructed from decompiled protobuf-lite Java classes.
+// Field numbers extracted from *_FIELD_NUMBER constants.
+// Only messages needed for AIBusService/Understand are fully defined;
+// referenced-but-unused types are stubbed as empty messages.
+
+syntax = "proto3";
+
+package humane.aibus;
+
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+
+// ---- Enums ----
+
+enum SynapseUser {
+  SYSTEM    = 0;
+  USER      = 1;
+  ASSISTANT = 2;
+}
+
+enum SynapseSource {
+  DEVICE = 0;
+  SERVER = 1;
+}
+
+// ---- Core messages for Understand RPC ----
+
+message SynapseActionContent {
+  string thought = 1;
+  string action = 2;
+  string input = 3;
+  bytes device_payload = 4;
+  SynapseSource source = 5;
+}
+
+message SynapseEndContent {
+  // empty sentinel
+}
+
+message SynapseUserRequestContent {
+  enum VisionRequested {
+    UNSPECIFIED = 0;
+    VISION      = 1;
+    NO_VISION   = 2;
+  }
+
+  string request = 1;
+  double transcription_confidence = 2;
+  repeated string immutable_tokens = 3;
+  bool is_verbal = 4;
+  VisionRequested vision_requested = 5;
+  // Audio audio_bytes = 6;  -- omitted, not needed for PoC
+  string repaired_request = 7;
+  bytes image_data = 8;
+}
+
+message SynapseChatTurn {
+  SynapseUser user = 1;
+  oneof content {
+    SynapseUserRequestContent user_request = 2;
+    SynapseTaoContent tao = 3;
+    SynapseActionContent action = 5;
+    SynapseObservationContent observation = 6;
+    SynapseInterpretationContent interpretation = 7;
+    SynapseEndContent end = 10;
+    SynapseMessageContent message = 11;
+    SynapseSpeechContent speech = 12;
+  }
+  google.protobuf.Timestamp timestamp = 4;
+  string identifier = 8;
+  string parent_identifier = 9;
+}
+
+// ---- Request / Response ----
+
+message SynapseUnderstandingRequest {
+  string utterance = 1;
+  repeated string previous_answers = 2;
+  SynapseDeviceContext device_context = 3;
+  repeated SynapseActionDefinition action_definitions = 4;
+  repeated Session example_sessions = 5;
+  bool single_shot = 6;
+  bool send_actions_and_observations_separately = 7;
+  repeated string excluded_tools = 8;
+  ToolSetVersion tool_set_version = 9;
+  Location location = 10;
+  SpeechConfig speech_config = 11;
+}
+
+message SynapseUnderstandingResponse {
+  string response = 1;
+  bool is_final = 2;
+  oneof body {
+    SynapseAnswer answer = 3;
+    SynapseNoAnswerExplanation no_answer_explanation = 4;
+    SynapseFailure failure = 5;
+    SynapseHeartbeat heartbeat = 6;
+    SynapseInterpretation interpretation = 7;
+    SynapseChatTurn turn = 8;
+    SynapseDisambiguation disambiguation = 9;
+  }
+}
+
+// ---- Stub types (field numbers correct, bodies unused by server) ----
+
+message SynapseDeviceContext {
+  repeated SynapsePreviousAction previous_actions = 1;
+  google.protobuf.Timestamp current_timestamp = 2;
+  repeated SynapseChatTurn turns = 3;
+  SynapseUserSituation situation = 4;
+  bool is_locked = 5;
+  string reverse_geocoded_location = 6;
+}
+
+message SynapseUserSituation {}
+message SynapsePreviousAction {}
+message SynapseActionDefinition {}
+message Session {}
+message ToolSetVersion {
+  string set_name = 1;
+  int32 version = 2;
+}
+message Location {
+  double latitude = 1;
+  double longitude = 2;
+}
+message SpeechConfig {}
+
+message SynapseAnswer {}
+message SynapseNoAnswerExplanation {}
+message SynapseFailure {}
+message SynapseHeartbeat {}
+message SynapseInterpretation {}
+message SynapseDisambiguation {}
+message SynapseTaoContent {}
+message SynapseObservationContent {}
+message SynapseInterpretationContent {}
+message SynapseMessageContent {}
+message SynapseSpeechContent {}
+
+// ---- Service ----
+
+service AIBusService {
+  // Server-streaming: client sends one request, server streams responses.
+  rpc Understand (SynapseUnderstandingRequest)
+      returns (stream SynapseUnderstandingResponse);
+}

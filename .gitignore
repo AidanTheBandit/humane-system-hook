@@ -14,3 +14,9 @@
 .cxx
 local.properties
 .kotlin
+
+# Python
+__pycache__/
+*.pyc
+server/generated/
+server/.venv/
