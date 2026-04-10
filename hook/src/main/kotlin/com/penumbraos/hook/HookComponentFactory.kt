@@ -11,6 +11,10 @@ import java.io.File
  * The injector sets this as the target's appComponentFactory. Android instantiates
  * this class and calls instantiateApplication() before Application.attachBaseContext().
  *
+ * Hook modules are registered in [HOOK_MODULES]. Each module declares a "probe" class
+ * that must exist on the target's classloader for the module to activate. This allows
+ * a single hook APK to be injected into multiple target APKs
+ *
  * All hook initialization is wrapped in try/catch. If anything fails, the original
  * AppComponentFactory is delegated to and the app starts normally (unhooked).
  */
@@ -19,6 +23,18 @@ class HookComponentFactory : AppComponentFactory() {
     companion object {
         const val TAG = "PenumbraHook"
         const val HOOK_PACKAGE = "com.penumbraos.hook"
+
+        /**
+         * Registry of hook modules. Each entry is a probe class name and an
+         * install function. The probe class is loaded from the target's
+         * classloader — if it exists, that module's install() runs.
+         *
+         * Multiple modules can match the same process.
+         */
+        private val HOOK_MODULES: List<Pair<String, (ClassLoader) -> Unit>> = listOf(
+            "humaneinternal.system.MainApplication" to IronmanHooks::install,
+            "humane.experience.onboarding.OnboardingExperience" to OnboardingHooks::install,
+        )
     }
 
     override fun instantiateApplication(cl: ClassLoader, className: String): Application {
@@ -29,12 +45,38 @@ class HookComponentFactory : AppComponentFactory() {
 
         try {
             loadNativeLibs()
-            IronmanHooks.install(cl)
+            installMatchingModules(cl)
         } catch (t: Throwable) {
             Log.e(TAG, "Hook init failed, continuing without hooks", t)
         }
 
         return createApplication(cl, className)
+    }
+
+    /**
+     * Probe the target classloader and install every matching hook module.
+     */
+    private fun installMatchingModules(cl: ClassLoader) {
+        var installed = 0
+        for ((probeClass, install) in HOOK_MODULES) {
+            try {
+                cl.loadClass(probeClass)
+            } catch (_: ClassNotFoundException) {
+                continue
+            }
+            Log.i(TAG, "  Module matched: $probeClass")
+            try {
+                install(cl)
+                installed++
+            } catch (t: Throwable) {
+                Log.e(TAG, "  Module install failed for $probeClass", t)
+            }
+        }
+        if (installed == 0) {
+            Log.w(TAG, "  No hook modules matched this process")
+        } else {
+            Log.i(TAG, "  $installed hook module(s) installed")
+        }
     }
 
     /**

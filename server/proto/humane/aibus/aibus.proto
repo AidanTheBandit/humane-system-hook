@@ -161,10 +161,53 @@ message SynapseSpeechContent {
   // SpeechSource source = 3;  -- omitted, enum not defined
 }
 
+// ---- AnalyzeImage messages ----
+
+enum ImageHint {
+  IMAGE_HINT_UNKNOWN = 0;
+  IMAGE_HINT_FOOD    = 1;
+  IMAGE_HINT_GEMINI  = 2;
+  IMAGE_HINT_GPT4V   = 3;
+}
+
+message AnalyzeImageRequest {
+  string base64_encoded_image = 1 [deprecated = true];
+  string request = 2;              // question text ("What is this?")
+  bytes image_data = 3;            // raw JPEG bytes
+  repeated ImageHint image_hints = 4;
+  string utterance = 5;            // raw transcription
+  map<string, string> if_then = 6; // SDK action mappings (ignored)
+}
+
+message AnalyzeImageResponse {
+  string observation = 1 [deprecated = true];
+  NestedAnalyzeImageResponse nested_analyze_image_response = 2;
+}
+
+message NestedAnalyzeImageResponse {
+  oneof response_one_of {
+    GenericImageResponse generic_image_response = 1;
+    FoodImageResponse food_image_response = 2;  // deprecated on device
+  }
+}
+
+message GenericImageResponse {
+  string observation = 1;  // text description of the image
+}
+
+message FoodImageResponse {
+  // deprecated — device treats this as an error.
+  // FoodBoundingBox messages omitted; not needed.
+}
+
 // ---- Service ----
 
 service AIBusService {
   // Server-streaming: client sends one request, server streams responses.
   rpc Understand (SynapseUnderstandingRequest)
       returns (stream SynapseUnderstandingResponse);
+
+  // Unary: device sends captured image + question, server returns observation.
+  rpc AnalyzeImage (AnalyzeImageRequest)
+      returns (AnalyzeImageResponse);
 }

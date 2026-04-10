@@ -47,9 +47,12 @@ object IronmanHooks {
             hookChannelFactory(cl, className)
         }
 
-        // Fix provisioning state: set baseline mode to NORMAL and ensure
-        // DUC_PROVISIONED flag is set. Needs Application context, so we
-        // hook Application.onCreate() and run once.
+        // Hook DAC signature generation as a safety net
+        hookDacSignature(cl)
+
+        // Provisioning state fix: only force NORMAL mode and DUC_PROVISIONED=1
+        // if onboarding has already completed. On a fresh device, leave these
+        // alone so the onboarding UI runs naturally.
         hookApplicationOnCreate(cl)
 
         Log.i(TAG, "Ironman hooks installed")
@@ -150,7 +153,7 @@ object IronmanHooks {
                         Log.i(TAG, ">>> $className.$methodName($paramTypes)")
                         Log.i(TAG, "    thread=${Thread.currentThread().name}")
                         param.args?.forEachIndexed { i, arg ->
-                            Log.i(TAG, "    arg[$i]=${summarizeArg(arg)}")
+                            Log.i(TAG, "    arg[$i]=${HookUtils.summarizeArg(arg)}")
                         }
                     }
 
@@ -166,7 +169,7 @@ object IronmanHooks {
                         if (param.throwable != null) {
                             Log.i(TAG, "<<< $className.$methodName() threw: ${param.throwable}")
                         } else {
-                            Log.i(TAG, "<<< $className.$methodName() -> ${summarizeArg(param.result)}")
+                            Log.i(TAG, "<<< $className.$methodName() -> ${HookUtils.summarizeArg(param.result)}")
                         }
                     }
                 })
@@ -241,29 +244,29 @@ object IronmanHooks {
     }
 
     /**
-     * Fix the provisioning state so the device accepts voice commands.
+     * Fix the provisioning state iff onboarding has already completed.
      *
-     * Two fixes:
+     * If DUC_PROVISIONED is already 1, this is a reboot after successful onboarding.
+     * We ensure baseline mode stays NORMAL (recovery from any mode drift).
      *
-     * 1. Set SystemMode baseline to NORMAL (0) via ISystemModeService Binder IPC.
-     *    The device is stuck at OOBE (1) because onboarding was skipped.
-     *    SystemModeService persists this to SharedPreferences and broadcasts
-     *    the mode change via IModeCallback — TouchpadActionManager picks it up
-     *    immediately, enabling gesture handlers for NORMAL mode.
-     *
-     * 2. Ensure Settings.Global "humane.settings.global.DUC_PROVISIONED" = 1.
-     *    SystemUI's TouchpadEventReceiver watches this via ContentObserver and
-     *    suppresses ALL gestures when it's 0. Setting it to 1 unblocks gestures
-     *    in SystemUI immediately (the observer fires on change).
+     * If DUC_PROVISIONED is 0, onboarding has NOT completed yet. We leave
+     * everything alone so the onboarding UI can run naturally.
      */
     private fun fixProvisioningState(app: Application, cl: ClassLoader) {
-        Log.i(TAG, "=== Fixing provisioning state ===")
+        val resolver = app.contentResolver
+        val key = "humane.settings.global.DUC_PROVISIONED"
+        val current = Settings.Global.getInt(resolver, key, 0)
 
-        // --- Fix 1: Set baseline mode to NORMAL via Binder IPC ---
+        Log.i(TAG, "=== Provisioning state check: DUC_PROVISIONED=$current ===")
+
+        if (current == 0) {
+            Log.i(TAG, "  Device not yet provisioned — letting onboarding run naturally")
+            return
+        }
+
+        // Already provisioned — ensure baseline mode is NORMAL after reboot
+        Log.i(TAG, "  Device already provisioned — ensuring NORMAL mode")
         fixBaselineMode(cl)
-
-        // --- Fix 2: Ensure DUC_PROVISIONED = 1 ---
-        fixDucProvisioned(app)
 
         Log.i(TAG, "=== Provisioning fix complete ===")
     }
@@ -335,6 +338,7 @@ object IronmanHooks {
      *
      * The ContentObserver in SystemUI fires immediately on change.
      */
+    @Suppress("unused")
     private fun fixDucProvisioned(app: Application) {
         try {
             val resolver = app.contentResolver
@@ -360,20 +364,45 @@ object IronmanHooks {
     }
 
     /**
-     * Summarize an argument for logging without calling toString() on potentially
-     * large or sensitive objects.
+     * Hook DeviceAttestationManager.generateVerifierSignature() as a safety net.
+     *
+     * During onboarding, UserBindingManager calls dacManager.generateVerifierSignature()
+     * to sign the device ID with the DAC private key. If the DAC private key is
+     * missing from the HumaneKeyStore TEE, this would crash.
+     *
+     * We hook it to return a dummy signature if it throws. The mock server
+     * ignores signatures anyway.
      */
-    private fun summarizeArg(arg: Any?): String {
-        if (arg == null) return "null"
-        return try {
-            when (arg) {
-                is String -> "\"$arg\""
-                is Number, is Boolean -> arg.toString()
-                is Enum<*> -> arg.name
-                else -> "${arg.javaClass.simpleName}@${System.identityHashCode(arg).toString(16)}"
-            }
+    private fun hookDacSignature(cl: ClassLoader) {
+        val className = "humaneinternal.system.credentials.DeviceAttestationManager"
+        val clazz = try {
+            cl.loadClass(className)
+        } catch (e: ClassNotFoundException) {
+            Log.w(TAG, "  $className not found, skipping DAC signature hook")
+            return
+        }
+
+        // generateVerifierSignature(byte[]) -> byte[]
+        // It calls CryptoUtils.generateSignature(payload, dacPrivateKey) internally
+        try {
+            val method = clazz.getDeclaredMethod("generateVerifierSignature", ByteArray::class.java)
+            method.isAccessible = true
+            XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    if (param.throwable != null) {
+                        // DAC private key missing — return a dummy ECDSA-like signature
+                        param.throwable = null
+                        param.result = ByteArray(64) { 0x01 }
+                        Log.w(TAG, "  DAC generateVerifierSignature() threw ${param.throwable?.javaClass?.simpleName} — returning dummy signature")
+                    } else {
+                        Log.i(TAG, "  DAC generateVerifierSignature() succeeded with real signature")
+                    }
+                }
+            })
+            Log.i(TAG, "  Hooked $className.generateVerifierSignature() (safety net)")
         } catch (t: Throwable) {
-            "${arg.javaClass.simpleName}(toString failed)"
+            Log.e(TAG, "  Failed to hook generateVerifierSignature: ${t.message}")
         }
     }
+
 }

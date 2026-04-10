@@ -1,0 +1,184 @@
+// Reconstructed from decompiled protobuf-lite Java classes.
+// DeviceOnboardingDACService — provisioning/onboarding RPCs.
+//
+// This service runs on the ONBOARDING gateway (onboarding.prod.humane.cloud).
+// The device uses the DAC (Device Attestation Credential) for mTLS to this gateway.
+
+syntax = "proto3";
+
+package humane.provisioning;
+
+option java_multiple_files = true;
+
+// ---- Enums ----
+
+enum SubscriptionStatusCode {
+  SUBSCRIPTION_STATUS_CODE_UNSPECIFIED = 0;
+  SUBSCRIPTION_STATUS_CODE_ACTIVE = 1;
+  SUBSCRIPTION_STATUS_CODE_AVAILABLE = 2;
+  SUBSCRIPTION_STATUS_CODE_INACTIVE = 3;
+}
+
+enum OpaqueLoginStatusCode {
+  OPAQUE_LOGIN_STATUS_UNSPECIFIED = 0;
+  OPAQUE_LOGIN_STATUS_SUCCESSFUL_REQUEST = 1;
+  OPAQUE_LOGIN_STATUS_MISSING_HMC = 2;
+  OPAQUE_LOGIN_STATUS_RATE_LIMIT_HIT = 3;
+  OPAQUE_LOGIN_STATUS_MISSING_REGISTRATION = 4;
+}
+
+enum HmcAssociationResponseCode {
+  HMC_ASSOCIATION_RESPONSE_CODE_UNSPECIFIED = 0;
+  HMC_ASSOCIATION_RESPONSE_CODE_SUCCESS = 1;
+  HMC_ASSOCIATION_RESPONSE_CODE_FAILURE = 2;
+}
+
+enum VerifyHmcByPassResponseCode {
+  VERIFY_HMC_BY_PASS_RESPONSE_CODE_UNSPECIFIED = 0;
+  VERIFY_HMC_BY_PASS_RESPONSE_CODE_ALLOWED = 1;
+  VERIFY_HMC_BY_PASS_RESPONSE_CODE_NOT_ALLOWED = 2;
+}
+
+enum SignatureStandard {
+  UNSET_SIG_STANDARD = 0;
+  ECDSA_SHA256 = 1;
+}
+
+enum CertificateFormat {
+  UNSET_FORMAT = 0;
+  X509 = 1;
+  PKCS_7 = 2;
+  PKCS_10 = 3;
+}
+
+enum CertificateEncoding {
+  UNSET_ENCODING = 0;
+  DER = 1;
+  PEM = 2;
+}
+
+// ---- Sub-messages ----
+
+message SubscriptionStatus {
+  SubscriptionStatusCode status_code = 1;
+  string message = 2;
+}
+
+message OpaqueLoginStatus {
+  OpaqueLoginStatusCode status_code = 1;
+  string message = 2;
+}
+
+message VerificationSignature {
+  SignatureStandard signature_standard = 1;
+  bytes signature = 2;
+}
+
+message EncryptedPayload {
+  bytes payload = 1;
+  bytes iv = 2;
+}
+
+message CertificateSigningRequest {
+  CertificateFormat format = 1;
+  CertificateEncoding encoding = 2;
+  bytes csr = 3;
+}
+
+message Certificate {
+  CertificateFormat format = 1;
+  CertificateEncoding encoding = 2;
+  bytes certificate = 3;
+}
+
+message Chain {
+  repeated Certificate cert = 1;
+}
+
+// ---- RPC Request/Response Messages ----
+
+// GetSubscriptionStatus
+message GetSubscriptionStatusRequest {
+  // empty
+}
+
+message GetSubscriptionStatusResponse {
+  SubscriptionStatus status = 1;
+}
+
+// GetAssignedUserDAC
+message GetAssignedUserDACRequest {
+  // empty
+}
+
+message GetAssignedUserResponse {
+  string user_id = 1;
+  string display_name = 2;
+}
+
+// VerifyHmcAssociation
+message VerifyHmcAssociationRequest {
+  VerificationSignature device_id_verification_signature = 1;
+  string hmc_id = 2;
+}
+
+message VerifyHmcAssociationResponse {
+  HmcAssociationResponseCode status = 1;
+}
+
+// VerifyHmcByPass
+message VerifyHmcByPassRequest {
+  // empty
+}
+
+message VerifyHmcByPassResponse {
+  VerifyHmcByPassResponseCode status = 1;
+}
+
+// CreateLoginInit (OPAQUE KE1 -> KE2)
+message CreateLoginInitRequest {
+  bytes login_request = 1;
+  VerificationSignature device_id_verification_signature = 2;
+  string device_id = 3;
+}
+
+message CreateLoginInitResponse {
+  bytes login_response = 1;
+  OpaqueLoginStatus response_code = 2;
+}
+
+// CreateLoginFinish (OPAQUE KE3 -> userId + displayName)
+message CreateLoginFinishRequest {
+  bytes login_finish_request = 1;
+  VerificationSignature device_id_verification_signature = 2;
+  string device_id = 3;
+}
+
+message CreateLoginFinishResponse {
+  string user_id = 1;
+  OpaqueLoginStatus response_code = 2;
+  string display_name = 3;
+}
+
+// CreateDeviceUserBinding (CSR + encrypted DAC sig -> encrypted DUC cert)
+message EncryptedCreateDeviceUserBindingRequest {
+  CertificateSigningRequest device_user_credential_csr = 1;
+  EncryptedPayload device_attestation_credential_verification_signature = 2;
+}
+
+message EncryptedCreateDeviceUserBindingResponse {
+  EncryptedPayload device_user_certificate = 1;
+  Chain ca_chain = 2;
+}
+
+// ---- Service ----
+
+service DeviceOnboardingDACService {
+  rpc GetSubscriptionStatus (GetSubscriptionStatusRequest) returns (GetSubscriptionStatusResponse);
+  rpc GetAssignedUserDAC (GetAssignedUserDACRequest) returns (GetAssignedUserResponse);
+  rpc VerifyHmcAssociation (VerifyHmcAssociationRequest) returns (VerifyHmcAssociationResponse);
+  rpc VerifyHmcByPass (VerifyHmcByPassRequest) returns (VerifyHmcByPassResponse);
+  rpc CreateLoginInit (CreateLoginInitRequest) returns (CreateLoginInitResponse);
+  rpc CreateLoginFinish (CreateLoginFinishRequest) returns (CreateLoginFinishResponse);
+  rpc CreateDeviceUserBinding (EncryptedCreateDeviceUserBindingRequest) returns (EncryptedCreateDeviceUserBindingResponse);
+}

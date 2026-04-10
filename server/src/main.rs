@@ -24,6 +24,9 @@ mod proto {
     pub mod events {
         tonic::include_proto!("humane.events");
     }
+    pub mod provisioning {
+        tonic::include_proto!("humane.provisioning");
+    }
 }
 
 use std::path::PathBuf;
@@ -35,12 +38,14 @@ use proto::aibus::ai_bus_service_server::AiBusServiceServer;
 use proto::contacts::contacts_rpc_service_server::ContactsRpcServiceServer;
 use proto::events::events_ingest_service_server::EventsIngestServiceServer;
 use proto::featureflags::feature_flags_service_server::FeatureFlagsServiceServer;
+use proto::provisioning::device_onboarding_dac_service_server::DeviceOnboardingDacServiceServer;
 use proto::pushrelay::push_relay_service_server::PushRelayServiceServer;
 
 use services::aibus::AiBusServiceImpl;
 use services::contacts::ContactsRpcServiceImpl;
 use services::events::EventsIngestServiceImpl;
 use services::featureflags::FeatureFlagsServiceImpl;
+use services::provisioning::{OnboardingCa, ProvisioningServiceImpl};
 use services::pushrelay::PushRelayServiceImpl;
 use services::user_info::UserInformationServiceImpl;
 use services::wifi_config::WifiConfigServiceImpl;
@@ -48,6 +53,8 @@ use services::wifi_config::WifiConfigServiceImpl;
 use config::Config;
 use llm::LlmAgent;
 use tonic::transport::Server;
+use tower_http::classify::GrpcFailureClass;
+use tower_http::trace::TraceLayer;
 use tracing::info;
 
 #[tokio::main]
@@ -79,6 +86,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.server.system_prompt,
     )?);
 
+    // Generate ephemeral CA for signing DUC certificates during onboarding
+    let onboarding_ca = Arc::new(OnboardingCa::generate()?);
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let display_name = config
+        .server
+        .display_name
+        .clone()
+        .unwrap_or_else(|| "Penumbra".into());
+
     let addr = format!("0.0.0.0:{}", port).parse()?;
 
     let provider_label = config.llm.provider.to_uppercase();
@@ -88,9 +104,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "LLM provider: {} (model: {})",
         provider_label, config.llm.model
     );
+    info!(
+        "Onboarding: display_name={}, user_id={}",
+        display_name, user_id
+    );
     info!("Services:");
     info!(
         "  - humane.aibus.AIBusService/Understand       ({})",
+        config.llm.provider
+    );
+    info!(
+        "  - humane.aibus.AIBusService/AnalyzeImage     ({}, vision)",
         config.llm.provider
     );
     info!("  - humane.pushrelay.PushRelayService/Subscribe (no-op hold)");
@@ -101,10 +125,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  - humane.contacts.ContactsRPCService/GetContacts (empty)");
     info!("  - humane.events.EventsIngestService/Ingest (discard)");
     info!("  - humane.events.EventsIngestService/IngestBatch (discard)");
+    info!("  - humane.provisioning.DeviceOnboardingDACService/* (onboarding)");
     info!("  - All other RPCs: UNIMPLEMENTED");
     info!("============================================================");
 
     Server::builder()
+        .layer(
+            TraceLayer::new_for_grpc()
+                .make_span_with(|request: &http::Request<_>| {
+                    tracing::info_span!(
+                        "grpc",
+                        path = %request.uri().path(),
+                    )
+                })
+                .on_request(|_request: &http::Request<_>, _span: &tracing::Span| {
+                    info!("request");
+                })
+                .on_response(
+                    |response: &http::Response<_>,
+                     latency: std::time::Duration,
+                     _span: &tracing::Span| {
+                        info!(latency = ?latency, status = %response.status(), "response");
+                    },
+                )
+                .on_failure(
+                    |error: GrpcFailureClass,
+                     latency: std::time::Duration,
+                     _span: &tracing::Span| {
+                        tracing::error!(latency = ?latency, error = %error, "failed");
+                    },
+                ),
+        )
         .add_service(AiBusServiceServer::new(AiBusServiceImpl { agent }))
         .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
         .add_service(FeatureFlagsServiceServer::new(FeatureFlagsServiceImpl))
@@ -114,6 +165,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .add_service(ContactsRpcServiceServer::new(ContactsRpcServiceImpl))
         .add_service(EventsIngestServiceServer::new(EventsIngestServiceImpl))
+        .add_service(DeviceOnboardingDacServiceServer::new(
+            ProvisioningServiceImpl {
+                ca: onboarding_ca,
+                display_name,
+                user_id,
+            },
+        ))
         .serve(addr)
         .await?;
 

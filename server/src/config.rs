@@ -37,6 +37,9 @@ pub struct ServerConfig {
     /// System prompt sent to the LLM.
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+
+    /// Display name shown during onboarding welcome screen.
+    pub display_name: Option<String>,
 }
 
 // --- defaults ---
@@ -73,6 +76,7 @@ impl Default for ServerConfig {
         Self {
             port: default_port(),
             system_prompt: default_system_prompt(),
+            display_name: None,
         }
     }
 }

@@ -23,6 +23,12 @@ async-stream = "0.3"
 rig-core = "0.34"
 toml = "0.8"
 futures = "0.3"
+base64 = "0.22"
+rcgen = "0.13"
+aes-gcm = "0.10"
+rand = "0.8"
+tower-http = { version = "0.6", features = ["trace"] }
+http = "1"
 
 [build-dependencies]
 tonic-build = "0.12"
