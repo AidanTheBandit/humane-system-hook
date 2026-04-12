@@ -86,7 +86,39 @@ class BootInjectionReceiver : BroadcastReceiver() {
             }
         }
 
+        disableMemfaultDaemons()
+
         Log.i(TAG, "Boot injection complete")
+    }
+
+    /**
+     * Stop Memfault native daemons by setting their property gates to "0".
+     *
+     * memfault-structured-logd is gated by:
+     *   persist.system.memfault.bort.enabled=1 AND persist.system.memfault.structured.enabled=1
+     * Setting either to "0" triggers init to stop the service.
+     */
+    private fun disableMemfaultDaemons() {
+        val props = mapOf(
+            "persist.system.memfault.bort.enabled" to "0",
+            "persist.system.memfault.structured.enabled" to "0",
+        )
+
+        try {
+            val sysPropClass = Class.forName("android.os.SystemProperties")
+            val setMethod = sysPropClass.getDeclaredMethod("set", String::class.java, String::class.java)
+
+            for ((key, value) in props) {
+                try {
+                    setMethod.invoke(null, key, value)
+                    Log.i(TAG, "Set $key=$value")
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed to set $key: ${t.message}")
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to access SystemProperties for memfault daemon disable", t)
+        }
     }
 
     /**

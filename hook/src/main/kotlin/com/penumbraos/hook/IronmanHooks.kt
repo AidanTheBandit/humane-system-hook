@@ -47,6 +47,18 @@ object IronmanHooks {
         // alone so the onboarding UI runs naturally.
         hookApplicationOnCreate(cl)
 
+        // Block Datadog SDK initialization (RUM, tracing, crash reports, log forwarding
+        // to browser-intake-datadoghq.com)
+        DatadogBypass.install(cl)
+
+        // Block Microsoft Cognitive Services Speech SDK telemetry
+        // (1DS protocol to mobile.events.data.microsoft.com)
+        MsTelemetryBypass.install(cl)
+
+        // Block Humane connectivity check phone-home
+        // (HTTP GET to connectivity-check.prod.humane.cloud — cosmetic only)
+        ConnectivityCheckBypass.install(cl)
+
         Log.i(TAG, "Ironman hooks installed")
     }
 
