@@ -36,6 +36,7 @@ class HookComponentFactory : AppComponentFactory() {
             "humane.experience.onboarding.OnboardingExperience" to OnboardingHooks::install,
             "system.PhotographyExperienceApplication" to PhotographyHooks::install,
             "humaneinternal.system.krypto.KryptoService" to KryptoHooks::install,
+            "humane.experience.systemnavigation.SystemNavigationExperience" to SystemNavigationHooks::install,
         )
     }
 

@@ -30,6 +30,7 @@ class BootInjectionReceiver : BroadcastReceiver() {
             "humane.experience.onboarding",
             "humane.experience.photography",
             "hu.ma.ne.krypto",
+            "humane.experience.systemnavigation",
         )
 
         /**
