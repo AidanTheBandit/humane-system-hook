@@ -8,6 +8,7 @@ syntax = "proto3";
 package humane.aibus;
 
 import "google/protobuf/timestamp.proto";
+import "humane/common/encryption.proto";
 
 option java_multiple_files = true;
 
@@ -200,6 +201,81 @@ message FoodImageResponse {
   // FoodBoundingBox messages omitted; not needed.
 }
 
+// ---- Weather messages ----
+
+message WeatherResponse {
+  bool has_precipitation = 1;
+  string precipitation_type = 2;
+  double temperature_fahrenheit = 3;
+  double temperature_celsius = 4;
+  string weather_text = 5;
+  int32 weather_icon = 6;
+  int32 u_v_index = 7;
+}
+
+message EncryptedWeatherRequest {
+  // Field 1 intentionally absent (matches APK definition).
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedWeatherResponse {
+  // Field 1 intentionally absent (matches APK definition).
+  humane.common.encryption.EncryptedData response = 2;
+}
+
+// ---- GeoLocate messages ----
+
+message CellTower {
+  int32  cell_id             = 1;
+  int32  new_radio_cell_id   = 2;
+  int32  location_area_code  = 3;
+  int32  mobile_country_code = 4;
+  int32  mobile_network_code = 5;
+  int32  age                 = 6;
+  double signal_strength     = 7;
+  double timing_advance      = 8;
+}
+
+message WifiAccessPoint {
+  string mac_address           = 1;
+  double signal_strength       = 2;
+  int32  age                   = 3;
+  int32  channel               = 4;
+  double signal_to_noise_ratio = 5;
+}
+
+message GeoLocateRequest {
+  int32  home_mobile_country_code = 1;
+  int32  home_mobile_network_code = 2;
+  string radio_type               = 3;
+  string carrier                  = 4;
+  bool   consider_ip              = 5;
+  repeated CellTower       cell_towers        = 6;
+  repeated WifiAccessPoint wifi_access_points = 7;
+}
+
+enum GeoLocateResponseStatus {
+  GEOLOCATE_RESPONSE_STATUS_UNSPECIFIED    = 0;
+  GEOLOCATE_RESPONSE_STATUS_SUCCESS        = 1;
+  GEOLOCATE_RESPONSE_STATUS_BAD_REQUEST    = 2;
+  GEOLOCATE_RESPONSE_STATUS_INTERNAL_ERROR = 3;
+  GEOLOCATE_RESPONSE_STATUS_NOT_FOUND      = 4;
+}
+
+message GeoLocateResponse {
+  Location                location        = 1;
+  double                  radius_accuracy = 2;
+  GeoLocateResponseStatus status          = 3;
+}
+
+message EncryptedGeoLocateRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedGeoLocateResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
 // ---- Service ----
 
 service AIBusService {
@@ -210,4 +286,12 @@ service AIBusService {
   // Unary: device sends captured image + question, server returns observation.
   rpc AnalyzeImage (AnalyzeImageRequest)
       returns (AnalyzeImageResponse);
+
+  // Unary: device sends encrypted location, server returns encrypted weather.
+  rpc EncryptedWeather (EncryptedWeatherRequest)
+      returns (EncryptedWeatherResponse);
+
+  // Unary: device sends cell/wifi data, server returns geolocation.
+  rpc EncryptedGeoLocate (EncryptedGeoLocateRequest)
+      returns (EncryptedGeoLocateResponse);
 }

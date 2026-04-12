@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use base64::Engine as _;
+use prost::Message as _;
 use rig::completion::message::Message;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
@@ -11,9 +12,12 @@ use uuid::Uuid;
 use crate::llm::LlmAgent;
 use crate::proto::aibus::ai_bus_service_server::AiBusService;
 use crate::proto::aibus::*;
+use crate::proto::common::encryption;
 
 pub struct AiBusServiceImpl {
     pub agent: Arc<LlmAgent>,
+    pub pirate_weather_api_key: Option<String>,
+    pub http_client: reqwest::Client,
 }
 
 /// Extract conversation history from device_context.turns into rig Messages.
@@ -151,6 +155,43 @@ fn make_action_response(
         is_final: false,
         body: Some(synapse_understanding_response::Body::Turn(turn)),
     }
+}
+
+/// Map PirateWeather icon string to the device's integer weather icon code.
+fn pirate_weather_icon_to_device(icon: &str) -> i32 {
+    match icon {
+        "clear-day" => 1,               // weather_01_sunny
+        "clear-night" => 33,            // weather_05_clear_skies_night
+        "partly-cloudy-day" => 3,       // weather_02_partly_cloudy_day
+        "partly-cloudy-night" => 35,    // weather_06_partly_cloudy_night
+        "cloudy" => 7,                  // weather_03_cloudy
+        "rain" => 12,                   // weather_07_rain
+        "snow" => 19,                   // weather_10_snow_flurries
+        "sleet" => 24,                  // weather_12_ice_and_sleet
+        "wind" => 32,                   // weather_13_windy
+        "fog" => 11,                    // weather_14_fog
+        "thunderstorm" => 15,           // weather_08_thunderstorms
+        _ => 3,                         // safe fallback: partly cloudy day
+    }
+}
+
+/// Wrap a plaintext proto into an EncryptedData envelope for the bypass hook.
+/// `kid` must be the fully-qualified Java class name of the inner proto.
+fn wrap_plaintext_envelope(kid: &str, data: Vec<u8>) -> encryption::EncryptedData {
+    encryption::EncryptedData {
+        encryption_information: Some(encryption::EncryptionInformation {
+            kid: kid.into(),
+        }),
+        data,
+    }
+}
+
+/// Decode the plaintext proto bytes from an EncryptedData envelope.
+fn unwrap_plaintext_data(encrypted: &Option<encryption::EncryptedData>) -> Result<&[u8], Status> {
+    encrypted
+        .as_ref()
+        .map(|ed| ed.data.as_slice())
+        .ok_or_else(|| Status::invalid_argument("missing encrypted data envelope"))
 }
 
 #[tonic::async_trait]
@@ -332,6 +373,136 @@ impl AiBusService for AiBusServiceImpl {
                     ),
                 ),
             }),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    async fn encrypted_weather(
+        &self,
+        request: Request<EncryptedWeatherRequest>,
+    ) -> Result<Response<EncryptedWeatherResponse>, Status> {
+        let api_key = self.pirate_weather_api_key.as_deref().ok_or_else(|| {
+            info!(">>> EncryptedWeather (no API key configured)");
+            Status::unavailable(
+                "weather not configured — set pirate_weather_api_key in config.toml",
+            )
+        })?;
+
+        // Decode LocationEnvelope from the encrypted request
+        let req = request.into_inner();
+        let location_bytes = unwrap_plaintext_data(&req.location)?;
+        let location = encryption::LocationEnvelope::decode(location_bytes)
+            .map_err(|e| Status::invalid_argument(format!("bad LocationEnvelope: {e}")))?;
+
+        info!(
+            lat = location.latitude,
+            lon = location.longitude,
+            ">>> EncryptedWeather"
+        );
+
+        // Call PirateWeather API (units=us for Fahrenheit)
+        let url = format!(
+            "https://api.pirateweather.net/forecast/{}/{},{}?units=us&exclude=minutely,hourly,daily,alerts",
+            api_key, location.latitude, location.longitude
+        );
+
+        let pw_response: serde_json::Value = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| {
+                warn!(error = %e, "PirateWeather HTTP request failed");
+                Status::unavailable(format!("weather API request failed: {e}"))
+            })?
+            .json()
+            .await
+            .map_err(|e| {
+                warn!(error = %e, "PirateWeather response parse failed");
+                Status::internal(format!("weather API response parse failed: {e}"))
+            })?;
+
+        let currently = pw_response.get("currently").ok_or_else(|| {
+            warn!("PirateWeather response missing 'currently' block");
+            Status::internal("weather API response missing current conditions")
+        })?;
+
+        let temp_f = currently
+            .get("temperature")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let temp_c = (temp_f - 32.0) * 5.0 / 9.0;
+        let icon_str = currently
+            .get("icon")
+            .and_then(|v| v.as_str())
+            .unwrap_or("partly-cloudy-day");
+        let summary = currently
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let uv_index = currently
+            .get("uvIndex")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as i32;
+        let precip_intensity = currently
+            .get("precipIntensity")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let precip_type = currently
+            .get("precipType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let weather_icon = pirate_weather_icon_to_device(icon_str);
+        let has_precipitation = precip_intensity > 0.0;
+
+        let weather = WeatherResponse {
+            has_precipitation,
+            precipitation_type: precip_type,
+            temperature_fahrenheit: temp_f,
+            temperature_celsius: temp_c,
+            weather_text: summary.clone(),
+            weather_icon,
+            u_v_index: uv_index,
+        };
+
+        let response = EncryptedWeatherResponse {
+            response: Some(wrap_plaintext_envelope(
+                "humane.aibus.WeatherResponse",
+                weather.encode_to_vec(),
+            )),
+        };
+
+        info!(
+            temp_f = format!("{temp_f:.0}"),
+            temp_c = format!("{temp_c:.0}"),
+            summary = %summary,
+            icon = %icon_str,
+            "<<< EncryptedWeather"
+        );
+        Ok(Response::new(response))
+    }
+
+    async fn encrypted_geo_locate(
+        &self,
+        _request: Request<EncryptedGeoLocateRequest>,
+    ) -> Result<Response<EncryptedGeoLocateResponse>, Status> {
+        info!(">>> EncryptedGeoLocate (stub: NOT_FOUND)");
+
+        let geo_response = GeoLocateResponse {
+            location: None,
+            radius_accuracy: 0.0,
+            status: GeoLocateResponseStatus::GeolocateResponseStatusNotFound as i32,
+        };
+
+        let response = EncryptedGeoLocateResponse {
+            response: Some(wrap_plaintext_envelope(
+                "humane.aibus.GeoLocateResponse",
+                geo_response.encode_to_vec(),
+            )),
         };
 
         Ok(Response::new(response))

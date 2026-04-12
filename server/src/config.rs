@@ -11,6 +11,8 @@ pub struct Config {
     pub server: ServerConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub weather: WeatherConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +55,12 @@ pub struct StorageConfig {
     /// Directory for storing captured media files.
     #[serde(default = "default_media_dir")]
     pub media_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WeatherConfig {
+    /// PirateWeather API key. If not set, weather requests return "unavailable".
+    pub pirate_weather_api_key: Option<String>,
 }
 
 // --- defaults ---
@@ -107,6 +115,14 @@ impl Default for StorageConfig {
     }
 }
 
+impl Default for WeatherConfig {
+    fn default() -> Self {
+        Self {
+            pirate_weather_api_key: None,
+        }
+    }
+}
+
 impl Config {
     /// Load config from file. Falls back to defaults if file is missing.
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
@@ -121,6 +137,7 @@ impl Config {
                 llm: LlmConfig::default(),
                 server: ServerConfig::default(),
                 storage: StorageConfig::default(),
+                weather: WeatherConfig::default(),
             })
         }
     }
@@ -143,5 +160,19 @@ impl LlmConfig {
         }
 
         None
+    }
+}
+
+impl WeatherConfig {
+    /// Resolve the PirateWeather API key
+    pub fn resolve_api_key(&self) -> Option<String> {
+        if let Ok(key) = std::env::var("PIRATE_WEATHER_API_KEY") {
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+        self.pirate_weather_api_key
+            .clone()
+            .filter(|k| !k.is_empty())
     }
 }

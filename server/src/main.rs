@@ -172,6 +172,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.server.system_prompt,
     )?);
 
+    // Resolve PirateWeather API key for weather service
+    let pirate_weather_api_key = config.weather.resolve_api_key();
+    let http_client = reqwest::Client::new();
+
     // Generate ephemeral CA for signing DUC certificates during onboarding
     let onboarding_ca = Arc::new(OnboardingCa::generate()?);
     let user_id = uuid::Uuid::new_v4().to_string();
@@ -207,6 +211,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Onboarding: display_name={}, user_id={}",
         display_name, user_id
     );
+    if pirate_weather_api_key.is_some() {
+        info!("Weather: PirateWeather API key configured");
+    } else {
+        info!("Weather: no API key. EncryptedWeather will return UNAVAILABLE");
+    }
     info!("Storage: media_dir={}", config.storage.media_dir);
     info!("Services:");
     info!(
@@ -235,29 +244,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build the gRPC service stack as a native axum::Router.
     // We use tonic::service::Routes (not tonic::transport::Server) so we get
     // an axum-compatible router that can be merged with our HTTP upload routes.
-    let grpc_router =
-        tonic::service::Routes::new(AiBusServiceServer::new(AiBusServiceImpl { agent }))
-            .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
-            .add_service(FeatureFlagsServiceServer::new(FeatureFlagsServiceImpl))
-            .add_service(WifiConfigServiceServer::new(WifiConfigServiceImpl))
-            .add_service(UserInformationServiceServer::new(
-                UserInformationServiceImpl,
-            ))
-            .add_service(ContactsRpcServiceServer::new(ContactsRpcServiceImpl))
-            .add_service(EventsIngestServiceServer::new(EventsIngestServiceImpl))
-            .add_service(DeviceOnboardingDacServiceServer::new(
-                ProvisioningServiceImpl {
-                    ca: onboarding_ca,
-                    display_name,
-                    user_id,
-                },
-            ))
-            .add_service(CaptureServiceServer::new(CaptureServiceImpl {
-                store: media_store.clone(),
-                server_addr: public_addr.clone(),
-            }))
-            .add_service(PublicPrivacyServiceServer::new(PublicPrivacyServiceImpl))
-            .into_axum_router();
+    let grpc_router = tonic::service::Routes::new(AiBusServiceServer::new(AiBusServiceImpl {
+        agent,
+        pirate_weather_api_key,
+        http_client,
+    }))
+    .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
+    .add_service(FeatureFlagsServiceServer::new(FeatureFlagsServiceImpl))
+    .add_service(WifiConfigServiceServer::new(WifiConfigServiceImpl))
+    .add_service(UserInformationServiceServer::new(
+        UserInformationServiceImpl,
+    ))
+    .add_service(ContactsRpcServiceServer::new(ContactsRpcServiceImpl))
+    .add_service(EventsIngestServiceServer::new(EventsIngestServiceImpl))
+    .add_service(DeviceOnboardingDacServiceServer::new(
+        ProvisioningServiceImpl {
+            ca: onboarding_ca,
+            display_name,
+            user_id,
+        },
+    ))
+    .add_service(CaptureServiceServer::new(CaptureServiceImpl {
+        store: media_store.clone(),
+        server_addr: public_addr.clone(),
+    }))
+    .add_service(PublicPrivacyServiceServer::new(PublicPrivacyServiceImpl))
+    .into_axum_router();
 
     // Build the axum HTTP router for upload endpoint
     let upload_state = UploadState { store: media_store };
