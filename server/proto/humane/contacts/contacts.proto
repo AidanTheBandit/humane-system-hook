@@ -5,76 +5,127 @@ syntax = "proto3";
 
 package humane.contacts;
 
+import "google/protobuf/timestamp.proto";
+import "humane/common/encryption.proto";
+
 option java_multiple_files = true;
 
 // ---- Messages ----
 
 message Name {
-  string unstructured_name = 1;
-  string first_name = 2;
-  string last_name = 3;
+  string first_name = 1;
+  string last_name = 2;
+  string nickname = 3;
+  string display_name = 4;
 }
 
 message PhoneNumber {
-  string number = 1;
-  string label = 2;
+  string value = 1;
+  string type = 2;
 }
 
 message Email {
-  string address = 1;
-  string label = 2;
+  string value = 1;
+  string type = 2;
 }
 
-enum ContactSource {
-  CONTACT_SOURCE_UNSPECIFIED = 0;
-  CONTACT_SOURCE_GOOGLE = 1;
-  CONTACT_SOURCE_ICLOUD = 2;
-  CONTACT_SOURCE_DEVICE = 3;
+message ContactSource {
+  string name = 1;
 }
 
 message Organization {
   string name = 1;
-  string title = 2;
+}
+
+enum SocialProviderAttributeEnum {
+  SOCIAL_PROVIDER_ATTRIBUTE_UNKNOWN = 0;
+  WORKSPACE_ID = 1;
+  USER_ID = 2;
 }
 
 message SocialProviderAttribute {
-  string key = 1;
+  SocialProviderAttributeEnum type = 1;
   string value = 2;
 }
 
+enum SocialProvider {
+  SOCIAL_PROVIDER_UNKNOWN = 0;
+  SLACK = 1;
+}
+
 message SocialHandle {
-  string provider = 1;
-  string handle = 2;
-  repeated SocialProviderAttribute attributes = 3;
+  SocialProvider social_provider = 1;
+  repeated SocialProviderAttribute social_provider_attributes = 2;
 }
 
 message ContactAction {
-  // deprecated, fields unknown
+  string id = 1;
+  string message = 2;
 }
 
 message Contact {
   string id = 1;
-  Name name = 2;
-  repeated PhoneNumber phone_numbers = 3;
-  repeated Email emails = 4;
-  bool favorite = 5;
-  int32 version = 6;
-  repeated ContactAction actions = 7 [deprecated = true];
-  ContactSource source = 8;
-  Organization organization = 9;
-  repeated SocialHandle social_handles = 10;
+  int32 version = 2 [deprecated = true];
+  repeated Email emails = 3;
+  Name name = 4;
+  repeated ContactAction contact_actions = 5 [deprecated = true];
+  repeated SocialHandle social_handles = 6;
+  repeated string telephone_numbers = 7 [deprecated = true];
+  bool temporary = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+  bool trusted = 10;
+  bool emergency = 11;
+  repeated PhoneNumber phone_numbers = 12;
+  ContactSource contact_source = 13;
+  Organization organization = 14;
+  google.protobuf.Timestamp modified_at = 15;
+  bool internal_favorite = 16;
 }
 
 message GetContactsRequest {
-  bool encrypted_contacts = 1 [deprecated = true];
+  optional string search_term = 1;
 }
 
 message ContactList {
-  repeated Contact contacts = 1;
+  repeated Contact contacts = 1 [deprecated = true];
+  repeated humane.common.encryption.EncryptedData encrypted_contacts = 2;
+  repeated int32 encrypted_contacts_versions = 3 [deprecated = true];
+}
+
+// ---- Streaming messages ----
+
+message GetContactsStreamingRequest {
+  oneof sync_option {
+    google.protobuf.Timestamp last_synced_time = 1;
+    bool full_sync = 2;
+  }
+  bool server_should_decrypt = 3;
+}
+
+message GetContactsStreamingPageRequest {
+  GetContactsStreamingRequest streaming_request = 1;
+  int32 page_size = 2;
+}
+
+message GetContactsStreamingResponse {
+  google.protobuf.Timestamp modified_time = 1;
+  oneof response {
+    string deleted_contact_id = 2;
+    humane.common.encryption.EncryptedData encrypted_contact = 3;
+    Contact contact = 4;
+  }
+}
+
+message GetContactsStreamingPageResponse {
+  repeated GetContactsStreamingResponse page_content = 1;
+  int32 page_num = 2;
+  int32 total_pages = 3;
 }
 
 // ---- Service ----
 
 service ContactsRPCService {
   rpc GetContacts (GetContactsRequest) returns (ContactList);
+  rpc GetContactsPaginatedStreaming (GetContactsStreamingPageRequest)
+      returns (stream GetContactsStreamingPageResponse);
 }
