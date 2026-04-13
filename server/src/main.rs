@@ -86,7 +86,7 @@ use config::Config;
 use llm::LlmAgent;
 use storage::MediaStore;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, warn};
 
 // ─── HTTP upload handler ────────────────────────────────────────────
 
@@ -139,6 +139,40 @@ async fn upload_handler(
             )
         }
     }
+}
+
+/// Catches any request that doesn't match a registered HTTP or gRPC route.
+/// Logs a warning and returns HTTP 404.
+async fn fallback_handler(request: axum::extract::Request) -> impl IntoResponse {
+    warn!(
+        method = %request.method(),
+        path = %request.uri(),
+        content_type = request.headers().get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("none"),
+        "unhandled request. No matching route"
+    );
+    (StatusCode::NOT_FOUND, "not found")
+}
+
+/// Middleware that inspects gRPC responses for UNIMPLEMENTED status (code 12)
+/// and logs a warning when one is detected.
+async fn log_grpc_unimplemented(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = request.uri().path().to_owned();
+    let response = next.run(request).await;
+
+    // gRPC status code 12 = UNIMPLEMENTED.
+    // Tonic sets this in the `grpc-status` header for routing-level rejections.
+    if let Some(status) = response.headers().get("grpc-status") {
+        if status.as_bytes() == b"12" {
+            warn!(path = %path, "gRPC UNIMPLEMENTED. method not registered");
+        }
+    }
+
+    response
 }
 
 // ─── main ───────────────────────────────────────────────────────────
@@ -269,7 +303,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_addr: public_addr.clone(),
     }))
     .add_service(PublicPrivacyServiceServer::new(PublicPrivacyServiceImpl))
-    .into_axum_router();
+    .into_axum_router()
+    .layer(axum::middleware::from_fn(log_grpc_unimplemented));
 
     // Build the axum HTTP router for upload endpoint
     let upload_state = UploadState { store: media_store };
@@ -307,10 +342,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Explicit HTTP routes get priority; gRPC routes are merged in.
     // Since gRPC paths (e.g. /humane.aibus.AIBusService/Understand) don't
     // conflict with /upload/{uuid}/{filename}, merge works cleanly.
+    // The fallback handler catches any request that doesn't match a known route.
     let app = axum::Router::new()
         .route("/upload/{uuid}/{filename}", put(upload_handler))
         .with_state(upload_state)
-        .fallback_service(grpc_router)
+        .merge(grpc_router)
+        .fallback(fallback_handler)
         .layer(trace_layer);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
