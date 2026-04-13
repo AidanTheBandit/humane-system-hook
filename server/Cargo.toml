@@ -31,6 +31,8 @@ rand = "0.10"
 tower-http = { version = "0.6", features = ["trace"] }
 tower = { version = "0.5", features = ["util"] }
 http = "1"
+http-body = "1"
+http-body-util = "0.1"
 axum = "0.8"
 reqwest = { version = "0.12", features = ["json"] }
 

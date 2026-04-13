@@ -5,6 +5,7 @@
 //! HTTP PUT /upload/:uuid/:filename is handled by axum for media uploads.
 
 mod config;
+mod dedup;
 mod llm;
 mod nearby;
 mod services;
@@ -84,10 +85,13 @@ use services::user_info::UserInformationServiceImpl;
 use services::wifi_config::WifiConfigServiceImpl;
 
 use config::Config;
+use dedup::DedupRouter;
 use llm::LlmAgent;
 use storage::MediaStore;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
+
+use std::time::Duration;
 
 // ─── HTTP upload handler ────────────────────────────────────────────
 
@@ -277,15 +281,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  - All other RPCs: UNIMPLEMENTED");
     info!("============================================================");
 
+    type AiBus = AiBusServiceServer<AiBusServiceImpl>;
+
     // Build the gRPC service stack as a native axum::Router.
-    // We use tonic::service::Routes (not tonic::transport::Server) so we get
-    // an axum-compatible router that can be merged with our HTTP upload routes.
-    let grpc_router = tonic::service::Routes::new(AiBusServiceServer::new(AiBusServiceImpl {
+    let grpc_router = DedupRouter::new(AiBusServiceServer::new(AiBusServiceImpl {
         agent,
         pirate_weather_api_key,
         nearby_client: nearby::NearbyClient::new(http_client.clone()),
         http_client,
     }))
+    .dedup::<AiBus>("EncryptedWeather", Duration::from_secs(300))
+    .dedup::<AiBus>("EncryptedNearbySearch", Duration::from_secs(30))
+    .dedup::<AiBus>("Understand", Duration::from_millis(200))
+    .dedup::<AiBus>("AnalyzeImage", Duration::from_millis(200))
     .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
     .add_service(FeatureFlagsServiceServer::new(FeatureFlagsServiceImpl))
     .add_service(WifiConfigServiceServer::new(WifiConfigServiceImpl))

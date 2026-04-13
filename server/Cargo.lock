@@ -809,6 +809,8 @@ dependencies = [
  "base64",
  "futures",
  "http",
+ "http-body",
+ "http-body-util",
  "prost",
  "prost-types",
  "rand 0.10.1",
