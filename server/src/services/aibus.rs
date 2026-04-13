@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::llm::LlmAgent;
+use crate::nearby::NearbyClient;
 use crate::proto::aibus::ai_bus_service_server::AiBusService;
 use crate::proto::aibus::*;
 use crate::proto::common::encryption;
@@ -18,6 +19,7 @@ pub struct AiBusServiceImpl {
     pub agent: Arc<LlmAgent>,
     pub pirate_weather_api_key: Option<String>,
     pub http_client: reqwest::Client,
+    pub nearby_client: NearbyClient,
 }
 
 /// Extract conversation history from device_context.turns into rig Messages.
@@ -514,6 +516,57 @@ impl AiBusService for AiBusServiceImpl {
             )),
         };
 
+        Ok(Response::new(response))
+    }
+
+    async fn encrypted_nearby_search(
+        &self,
+        request: Request<EncryptedNearbySearchRequest>,
+    ) -> Result<Response<EncryptedNearbySearchResponse>, Status> {
+        let req = request.into_inner();
+        let request_bytes = unwrap_plaintext_data(&req.request)?;
+        let nearby_req = NearbySearchRequest::decode(request_bytes)
+            .map_err(|e| Status::invalid_argument(format!("bad NearbySearchRequest: {e}")))?;
+
+        let location = nearby_req
+            .location
+            .ok_or_else(|| Status::invalid_argument("NearbySearchRequest missing location"))?;
+        let lat = location.latitude;
+        let lon = location.longitude;
+        let radius = if nearby_req.radius_accuracy > 0.0 {
+            nearby_req.radius_accuracy
+        } else {
+            1000.0
+        };
+
+        info!(
+            lat = lat,
+            lon = lon,
+            radius = radius,
+            query = %nearby_req.text_query,
+            ">>> EncryptedNearbySearch"
+        );
+
+        let nearby_places = self
+            .nearby_client
+            .search(lat, lon, radius, &nearby_req.text_query)
+            .await?;
+
+        let result_count = nearby_places.len();
+
+        let nearby_response = NearbySearchResponse {
+            nearby_places,
+            status: Some(NearbySearchResultStatus::Success as i32),
+        };
+
+        let response = EncryptedNearbySearchResponse {
+            response: Some(wrap_plaintext_envelope(
+                "humane.aibus.NearbySearchResponse",
+                nearby_response.encode_to_vec(),
+            )),
+        };
+
+        info!(results = result_count, "<<< EncryptedNearbySearch");
         Ok(Response::new(response))
     }
 }

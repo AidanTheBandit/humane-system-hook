@@ -223,6 +223,49 @@ message EncryptedWeatherResponse {
   humane.common.encryption.EncryptedData response = 2;
 }
 
+// ---- NearbySearch messages ----
+
+enum NearbySearchResultStatus {
+  NEARBY_SEARCH_RESULT_STATUS_UNSPECIFIED    = 0;
+  NEARBY_SEARCH_RESULT_STATUS_SUCCESS        = 1;
+  NEARBY_SEARCH_RESULT_STATUS_INTERNAL_ERROR = 2;
+  NEARBY_SEARCH_RESULT_STATUS_BAD_REQUEST    = 3;
+}
+
+message NearbyPlace {
+  string name                 = 1;
+  string formatted_address    = 2;
+  repeated string place_types = 3;
+  string place_id             = 4;
+  string phone_number         = 5;
+  string place_description    = 6;
+  string description_language = 7;
+  string website_url          = 8;
+  float rating                = 9;
+  int32 user_ratings_total    = 10;
+  Location location           = 11;
+  bool open_now               = 12;
+}
+
+message NearbySearchRequest {
+  string text_query       = 1;
+  Location location       = 2;
+  double radius_accuracy  = 3;
+}
+
+message NearbySearchResponse {
+  repeated NearbyPlace nearby_places        = 1;
+  optional NearbySearchResultStatus status  = 2;
+}
+
+message EncryptedNearbySearchRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedNearbySearchResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
 // ---- GeoLocate messages ----
 
 message CellTower {
@@ -294,4 +337,8 @@ service AIBusService {
   // Unary: device sends cell/wifi data, server returns geolocation.
   rpc EncryptedGeoLocate (EncryptedGeoLocateRequest)
       returns (EncryptedGeoLocateResponse);
+
+  // Unary: device sends encrypted location + query, server returns nearby places.
+  rpc EncryptedNearbySearch (EncryptedNearbySearchRequest)
+      returns (EncryptedNearbySearchResponse);
 }

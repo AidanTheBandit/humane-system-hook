@@ -6,6 +6,7 @@
 
 mod config;
 mod llm;
+mod nearby;
 mod services;
 mod storage;
 
@@ -270,6 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  - humane.events.EventsIngestService/IngestBatch (discard)");
     info!("  - humane.provisioning.DeviceOnboardingDACService/* (onboarding)");
     info!("  - humane.capture.CaptureService/* (photo/video/note storage)");
+    info!("  - humane.aibus.AIBusService/EncryptedNearbySearch (Overpass/OSM)");
     info!("  - humane.privacy.grpc.pub.PublicPrivacyService/* (stub — empty responses)");
     info!("  - PUT /upload/:uuid/:filename (HTTP media upload)");
     info!("  - All other RPCs: UNIMPLEMENTED");
@@ -281,6 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_router = tonic::service::Routes::new(AiBusServiceServer::new(AiBusServiceImpl {
         agent,
         pirate_weather_api_key,
+        nearby_client: nearby::NearbyClient::new(http_client.clone()),
         http_client,
     }))
     .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
