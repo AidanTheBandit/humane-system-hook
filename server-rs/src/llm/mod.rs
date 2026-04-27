@@ -94,8 +94,9 @@ impl LlmAgent {
                 Ok(LlmAgent::Echo)
             }
             "gemini" => {
-                let api_key = config.resolve_api_key()
-                    .ok_or("Gemini api_key not set in config.toml")?;
+                let api_key = config.resolve_api_key().ok_or(
+                    "Gemini api_key not set; configure GEMINI_API_KEY in the environment or .env, or set llm.api_key in config.toml",
+                )?;
                 let client = providers::gemini::Client::new(&api_key)?;
                 let agent = client
                     .agent(&config.model)
@@ -105,8 +106,9 @@ impl LlmAgent {
                 Ok(LlmAgent::Gemini(agent))
             }
             "anthropic" => {
-                let api_key = config.resolve_api_key()
-                    .ok_or("Anthropic api_key not set in config.toml")?;
+                let api_key = config.resolve_api_key().ok_or(
+                    "Anthropic api_key not set; configure ANTHROPIC_API_KEY in the environment or .env, or set llm.api_key in config.toml",
+                )?;
                 let client = providers::anthropic::Client::new(&api_key)?;
                 let agent = client
                     .agent(&config.model)
@@ -116,8 +118,9 @@ impl LlmAgent {
                 Ok(LlmAgent::Anthropic(agent))
             }
             "openai" | "openai-compatible" => {
-                let api_key = config.resolve_api_key()
-                    .ok_or("OpenAI api_key not set in config.toml")?;
+                let api_key = config.resolve_api_key().ok_or(
+                    "OpenAI api_key not set; configure OPENAI_API_KEY in the environment or .env, or set llm.api_key in config.toml",
+                )?;
                 let client = if let Some(ref base_url) = config.base_url {
                     providers::openai::CompletionsClient::builder()
                         .api_key(&api_key)

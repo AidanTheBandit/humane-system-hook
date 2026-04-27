@@ -19,7 +19,7 @@ object ChannelFactoryBypass {
     private const val TAG = "PenumbraHook"
 
     /** Mock server address. Non-443 port triggers usePlaintext() in ChannelFactory. */
-    const val MOCK_SERVER_URI = "192.168.1.125:9090"
+    const val MOCK_SERVER_URI = "127.0.0.1:9090"
 
     private val CHANNEL_FACTORY_CLASSES = listOf(
         "humaneinternal.system.network.ChannelFactory",

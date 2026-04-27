@@ -19,7 +19,6 @@ local.properties
 # Python
 __pycache__/
 *.pyc
-server/generated/
-server/.venv/
-server/data/
-server/media/
+server-rs/data/
+server-rs/media/
+**/jniLibs/

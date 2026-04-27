@@ -1,9 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::info;
 
 /// Top-level configuration, loaded from `config.toml`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub llm: LlmConfig,
@@ -15,7 +15,7 @@ pub struct Config {
     pub weather: WeatherConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LlmConfig {
     /// Provider name: "gemini", "anthropic", "openai", "openai-compatible", "echo"
     #[serde(default = "default_provider")]
@@ -32,15 +32,20 @@ pub struct LlmConfig {
     pub base_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ServerConfig {
-    /// gRPC listen port.
-    #[serde(default = "default_port")]
-    pub port: u16,
+    /// HTTP listen address for uploads and REST API.
+    #[serde(default = "default_http_bind_addr")]
+    pub http_bind_addr: String,
 
-    /// Public address the device will use to reach this server (e.g. "192.168.1.125:9090").
-    /// Used for constructing upload URLs. Falls back to the bind address if not set.
-    pub public_addr: Option<String>,
+    /// gRPC listen address for on-device RPCs.
+    #[serde(default = "default_grpc_bind_addr")]
+    pub grpc_bind_addr: String,
+
+    /// Public address the device will use to reach this server (e.g. "127.0.0.1:8080").
+    /// Used for constructing upload URLs.
+    #[serde(default = "default_public_addr")]
+    pub public_addr: String,
 
     /// System prompt sent to the LLM.
     #[serde(default = "default_system_prompt")]
@@ -50,7 +55,7 @@ pub struct ServerConfig {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct StorageConfig {
     /// Directory for storing captured media files.
     #[serde(default = "default_media_dir")]
@@ -61,7 +66,7 @@ pub struct StorageConfig {
     pub db_path: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WeatherConfig {
     /// PirateWeather API key. If not set, weather requests return "unavailable".
     pub pirate_weather_api_key: Option<String>,
@@ -77,8 +82,16 @@ fn default_model() -> String {
     "gemini-2.5-flash".into()
 }
 
-fn default_port() -> u16 {
-    9090
+fn default_http_bind_addr() -> String {
+    "0.0.0.0:8080".into()
+}
+
+fn default_grpc_bind_addr() -> String {
+    "127.0.0.1:9090".into()
+}
+
+fn default_public_addr() -> String {
+    "127.0.0.1:8080".into()
 }
 
 fn default_system_prompt() -> String {
@@ -107,8 +120,9 @@ impl Default for LlmConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            port: default_port(),
-            public_addr: None,
+            http_bind_addr: default_http_bind_addr(),
+            grpc_bind_addr: default_grpc_bind_addr(),
+            public_addr: default_public_addr(),
             system_prompt: default_system_prompt(),
             display_name: None,
         }
@@ -135,20 +149,32 @@ impl Default for WeatherConfig {
 impl Config {
     /// Load config from file. Falls back to defaults if file is missing.
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        if path.exists() {
+        let config = if path.exists() {
             let contents = std::fs::read_to_string(path)?;
             let config: Config = toml::from_str(&contents)?;
             info!(?path, "loaded config");
-            Ok(config)
+            config
         } else {
             info!(?path, "config file not found, using defaults");
-            Ok(Config {
+            Config {
                 llm: LlmConfig::default(),
                 server: ServerConfig::default(),
                 storage: StorageConfig::default(),
                 weather: WeatherConfig::default(),
-            })
+            }
+        };
+
+        #[cfg(target_os = "android")]
+        {
+            if !std::path::Path::new(&config.storage.media_dir).is_absolute() {
+                return Err(format!("Android requires absolute storage.media_dir, got {}", config.storage.media_dir).into());
+            }
+            if !std::path::Path::new(&config.storage.db_path).is_absolute() {
+                return Err(format!("Android requires absolute storage.db_path, got {}", config.storage.db_path).into());
+            }
         }
+
+        Ok(config)
     }
 }
 

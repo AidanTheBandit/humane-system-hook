@@ -4,6 +4,7 @@
 //! gRPC requests (content-type: application/grpc) are routed to tonic;
 //! HTTP PUT /upload/:uuid/:filename is handled by axum for media uploads.
 
+mod api;
 mod config;
 mod db;
 mod dedup;
@@ -56,15 +57,16 @@ mod proto {
     }
 }
 
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::put;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
+use tower_http::cors::CorsLayer;
 
 use proto::account::user_information_service_server::UserInformationServiceServer;
 use proto::account::wifi_config_service_server::WifiConfigServiceServer;
@@ -99,6 +101,26 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
 use std::time::Duration;
+
+#[cfg(not(target_os = "android"))]
+fn load_dotenv(config_path: &FsPath) {
+    let Some(config_dir) = config_path.parent() else {
+        return;
+    };
+
+    let dotenv_path = config_dir.join(".env");
+    if !dotenv_path.exists() {
+        return;
+    }
+
+    match dotenvy::from_path(&dotenv_path) {
+        Ok(()) => info!(path = %dotenv_path.display(), "loaded .env file"),
+        Err(error) => warn!(path = %dotenv_path.display(), %error, "failed to load .env file"),
+    }
+}
+
+#[cfg(target_os = "android")]
+fn load_dotenv(_config_path: &FsPath) {}
 
 // ─── HTTP upload handler ────────────────────────────────────────────
 
@@ -191,11 +213,17 @@ async fn log_grpc_unimplemented(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let env_filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    #[cfg(target_os = "android")]
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(env_filter)
+        .with_ansi(false)
+        .compact()
+        .without_time()
         .init();
+    #[cfg(not(target_os = "android"))]
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     // Locate config file: check --config <path>, then ./config.toml, then next to binary
     let config_path = std::env::args()
@@ -204,22 +232,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("config.toml"));
 
+    load_dotenv(&config_path);
+
     let config = Config::load(&config_path)?;
 
-    // CLI port arg overrides config (for backward compat: `humane-server 9090`)
-    let port: u16 = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(config.server.port);
-
-    // Build LLM agent
+    // Build LLM agent (behind RwLock for hot-reload)
     let agent = Arc::new(LlmAgent::from_config(
         &config.llm,
         &config.server.system_prompt,
     )?);
+    let shared_agent = Arc::new(RwLock::new(agent));
 
-    // Resolve PirateWeather API key for weather service
+    // Resolve PirateWeather API key for weather service (behind RwLock for hot-reload)
     let pirate_weather_api_key = config.weather.resolve_api_key();
+    let has_weather_key = pirate_weather_api_key.is_some();
+    let shared_weather_key = Arc::new(RwLock::new(pirate_weather_api_key));
     let http_client = reqwest::Client::new();
 
     // Generate ephemeral CA for signing DUC certificates during onboarding
@@ -239,18 +266,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         MediaStore::open(&config.storage.media_dir, database.clone()).await?,
     ));
 
-    // Server address the device will use in upload URLs
-    let server_addr = format!("0.0.0.0:{port}");
-    let bind_addr: std::net::SocketAddr = server_addr.parse()?;
-    let public_addr = config
-        .server
-        .public_addr
-        .clone()
-        .unwrap_or_else(|| format!("{}", bind_addr));
+    // Broadcast channel for real-time events to web portal clients
+    let (events_tx, _) = tokio::sync::broadcast::channel::<api::Event>(256);
+
+    let http_bind_addr: std::net::SocketAddr = config.server.http_bind_addr.parse()?;
+    let grpc_bind_addr: std::net::SocketAddr = config.server.grpc_bind_addr.parse()?;
+    let public_addr = config.server.public_addr.clone();
 
     let provider_label = config.llm.provider.to_uppercase();
     info!("============================================================");
-    info!("Humane gRPC server listening on {} (plaintext)", bind_addr);
+    info!("Humane HTTP server listening on {}", http_bind_addr);
+    info!("Humane gRPC server listening on {} (plaintext)", grpc_bind_addr);
     info!("Upload URL base: http://{}/upload/", public_addr);
     info!(
         "LLM provider: {} (model: {})",
@@ -260,7 +286,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Onboarding: display_name={}, user_id={}",
         display_name, user_id
     );
-    if pirate_weather_api_key.is_some() {
+    if has_weather_key {
         info!("Weather: PirateWeather API key configured");
     } else {
         info!("Weather: no API key. EncryptedWeather will return UNAVAILABLE");
@@ -288,15 +314,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  - humane.aibus.AIBusService/EncryptedNearbySearch (Overpass/OSM)");
     info!("  - humane.privacy.grpc.pub.PublicPrivacyService/* (stub — empty responses)");
     info!("  - PUT /upload/:uuid/:filename (HTTP media upload)");
+    info!("  - GET /api/* (REST API for web portal)");
+    info!("  - GET /api/events (NDJSON event stream)");
     info!("  - All other RPCs: UNIMPLEMENTED");
     info!("============================================================");
 
     type AiBus = AiBusServiceServer<AiBusServiceImpl>;
 
+    // Shared config for hot-reload via the web portal
+    let shared_config = Arc::new(RwLock::new(config.clone()));
+
     // Build the gRPC service stack as a native axum::Router.
     let grpc_router = DedupRouter::new(AiBusServiceServer::new(AiBusServiceImpl {
-        agent,
-        pirate_weather_api_key,
+        agent: shared_agent.clone(),
+        pirate_weather_api_key: shared_weather_key.clone(),
         nearby_client: nearby::NearbyClient::new(http_client.clone()),
         http_client,
         db: database,
@@ -323,19 +354,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .add_service(CaptureServiceServer::new(CaptureServiceImpl {
         store: media_store.clone(),
         server_addr: public_addr.clone(),
+        events_tx: events_tx.clone(),
     }))
     .add_service(PublicPrivacyServiceServer::new(PublicPrivacyServiceImpl))
     .add_service(PartnerTokenRpcServiceServer::new(PartnerServicesImpl))
     .into_axum_router()
+    .fallback(fallback_handler)
     .layer(axum::middleware::from_fn(log_grpc_unimplemented));
 
     // Build the axum HTTP router for upload endpoint
-    let upload_state = UploadState { store: media_store };
+    let upload_state = UploadState {
+        store: media_store.clone(),
+    };
 
-    // Apply trace layer to the combined router.
-    // Use new_for_http() (not new_for_grpc()) since we serve both HTTP uploads
-    // and gRPC. The HTTP classifier only flags 5xx as failures, which is
-    // correct: gRPC responses always have HTTP 200 status.
+    // Build the REST API router for the web portal
+    let api_state = api::ApiState {
+        store: media_store,
+        config: Arc::new(config),
+        events_tx,
+        config_path,
+        shared_config,
+        shared_agent,
+        shared_weather_key,
+    };
+
+    // CORS layer for the web portal (public HTTPS → local HTTP via LNA).
+    // The `Access-Control-Allow-Local-Network` header is required by the
+    // Local Network Access spec for the browser to allow cross-origin
+    // requests from a public site to a LAN server.
+    let cors = CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods([Method::GET, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_headers([http::header::CONTENT_TYPE])
+        .expose_headers([http::header::CONTENT_TYPE]);
+
+    let api_router = api::router(api_state).layer(cors).layer(
+        axum::middleware::from_fn(|request: axum::extract::Request, next: axum::middleware::Next| async {
+            let mut response = next.run(request).await;
+            // Inject the LNA header on every response (including preflights).
+            response.headers_mut().insert(
+                HeaderName::from_static("access-control-allow-local-network"),
+                HeaderValue::from_static("true"),
+            );
+            // Also advertise in preflight Allow-Headers so the browser accepts it.
+            response.headers_mut().insert(
+                HeaderName::from_static("access-control-allow-private-network"),
+                HeaderValue::from_static("true"),
+            );
+            response
+        }),
+    );
+
+    // Apply trace layer to the HTTP router.
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(|request: &http::Request<axum::body::Body>| {
             tracing::info_span!(
@@ -362,19 +432,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         );
 
-    // Explicit HTTP routes get priority; gRPC routes are merged in.
-    // Since gRPC paths (e.g. /humane.aibus.AIBusService/Understand) don't
-    // conflict with /upload/{uuid}/{filename}, merge works cleanly.
-    // The fallback handler catches any request that doesn't match a known route.
-    let app = axum::Router::new()
+    let http_app = axum::Router::new()
         .route("/upload/{uuid}/{filename}", put(upload_handler))
         .with_state(upload_state)
-        .merge(grpc_router)
+        .merge(api_router)
         .fallback(fallback_handler)
         .layer(trace_layer);
 
-    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
-    axum::serve(listener, app).await?;
+    let http_listener = tokio::net::TcpListener::bind(http_bind_addr).await?;
+    let grpc_listener = tokio::net::TcpListener::bind(grpc_bind_addr).await?;
+
+    let http_server = axum::serve(http_listener, http_app);
+    let grpc_server = axum::serve(grpc_listener, grpc_router);
+
+    tokio::try_join!(http_server, grpc_server)?;
 
     Ok(())
 }

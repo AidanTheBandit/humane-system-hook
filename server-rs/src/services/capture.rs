@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
+use crate::api;
 use crate::proto::capture::capture_service_server::CaptureService;
 use crate::proto::capture::*;
 use crate::proto::common::encryption as common;
@@ -16,6 +17,8 @@ pub struct CaptureServiceImpl {
     pub store: Arc<Mutex<MediaStore>>,
     /// Address the server is reachable at (e.g. "192.168.1.125:9090").
     pub server_addr: String,
+    /// Broadcast sender for real-time events to the web portal.
+    pub events_tx: tokio::sync::broadcast::Sender<api::Event>,
 }
 
 // ─── helpers ────────────────────────────────────────────────────────
@@ -211,6 +214,11 @@ impl CaptureService for CaptureServiceImpl {
                     }
                 }
 
+                // Notify web portal clients
+                if let Some(record) = store.get_memory(&memory_uuid).await {
+                    let _ = self.events_tx.send(api::Event::MemoryCreated { memory: record });
+                }
+
                 Ok(Response::new(CreateMemoryResponse {
                     status: CreateMemoryResultStatus::Success as i32,
                     memory: Some(Memory {
@@ -267,6 +275,11 @@ impl CaptureService for CaptureServiceImpl {
                     }
                 }
 
+                // Notify web portal clients
+                if let Some(record) = store.get_memory(&memory_uuid).await {
+                    let _ = self.events_tx.send(api::Event::MemoryCreated { memory: record });
+                }
+
                 Ok(Response::new(CreateMemoryResponse {
                     status: CreateMemoryResultStatus::Success as i32,
                     memory: Some(Memory {
@@ -309,6 +322,11 @@ impl CaptureService for CaptureServiceImpl {
                     }
                 }
 
+                // Notify web portal clients
+                if let Some(record) = store.get_memory(&memory_uuid).await {
+                    let _ = self.events_tx.send(api::Event::MemoryCreated { memory: record });
+                }
+
                 Ok(Response::new(CreateMemoryResponse {
                     status: CreateMemoryResultStatus::Success as i32,
                     memory: Some(Memory {
@@ -347,6 +365,11 @@ impl CaptureService for CaptureServiceImpl {
                             warn!(error = %e, "failed to save note data");
                         }
                     }
+                }
+
+                // Notify web portal clients
+                if let Some(record) = store.get_memory(&memory_uuid).await {
+                    let _ = self.events_tx.send(api::Event::MemoryCreated { memory: record });
                 }
 
                 Ok(Response::new(CreateMemoryResponse {
@@ -418,7 +441,12 @@ impl CaptureService for CaptureServiceImpl {
         let mut store = self.store.lock().await;
         if success == UploadCompletionStatus::UploadSuccess as i32 {
             match store.complete_memory(uuid).await {
-                Ok(true) => info!(uuid, "memory marked complete"),
+                Ok(true) => {
+                    info!(uuid, "memory marked complete");
+                    let _ = self.events_tx.send(api::Event::MemoryCompleted {
+                        uuid: uuid.clone(),
+                    });
+                }
                 Ok(false) => warn!(uuid, "memory not found for completion"),
                 Err(e) => warn!(uuid, error = %e, "failed to complete memory"),
             }
@@ -445,9 +473,14 @@ impl CaptureService for CaptureServiceImpl {
 
         let mut store = self.store.lock().await;
         match store.delete_memory(uuid).await {
-            Ok(true) => Ok(Response::new(DeleteMemoryResponse {
-                status: DeleteMemoryStatus::Success as i32,
-            })),
+            Ok(true) => {
+                let _ = self.events_tx.send(api::Event::MemoryDeleted {
+                    uuid: uuid.to_string(),
+                });
+                Ok(Response::new(DeleteMemoryResponse {
+                    status: DeleteMemoryStatus::Success as i32,
+                }))
+            }
             Ok(false) => Ok(Response::new(DeleteMemoryResponse {
                 status: DeleteMemoryStatus::NotFound as i32,
             })),

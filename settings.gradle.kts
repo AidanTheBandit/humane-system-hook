@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "humane-system-hook"
 include(":hook")
 include(":injector")
+include(":server")

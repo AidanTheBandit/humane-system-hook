@@ -1,0 +1,15 @@
+[llm]
+provider = "echo"
+model = "gemini-2.5-flash"
+
+[server]
+http_bind_addr = "0.0.0.0:8080"
+grpc_bind_addr = "127.0.0.1:9090"
+public_addr = "127.0.0.1:8080"
+system_prompt = "You are a helpful assistant running on a Humane AI Pin. Keep responses concise - they will be displayed on a laser projector and spoken aloud."
+
+[storage]
+media_dir = "__APP_MEDIA_DIR__"
+db_path = "__APP_DB_PATH__"
+
+[weather]

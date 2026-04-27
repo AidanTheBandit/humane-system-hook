@@ -4,6 +4,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use prost::Message as _;
 use rig::completion::message::Message;
+use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
@@ -17,8 +18,8 @@ use crate::proto::aibus::*;
 use crate::proto::common::encryption;
 
 pub struct AiBusServiceImpl {
-    pub agent: Arc<LlmAgent>,
-    pub pirate_weather_api_key: Option<String>,
+    pub agent: Arc<RwLock<Arc<LlmAgent>>>,
+    pub pirate_weather_api_key: Arc<RwLock<Option<String>>>,
     pub http_client: reqwest::Client,
     pub nearby_client: NearbyClient,
     pub db: Database,
@@ -360,7 +361,8 @@ impl AiBusService for AiBusServiceImpl {
         // --- Normal (non-vision) handling ---
 
         // Call LLM agent with conversation history
-        let response_text = match self.agent.chat(utterance, history.clone()).await {
+        let agent = self.agent.read().await.clone();
+        let response_text = match agent.chat(utterance, history.clone()).await {
             Ok(text) => text,
             Err(error) => {
                 warn!(error = %error, "LLM chat failed, falling back to error message");
@@ -414,7 +416,8 @@ impl AiBusService for AiBusServiceImpl {
         // Encode raw JPEG bytes to base64 for the LLM vision API
         let image_b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
 
-        let observation = match self.agent.vision_prompt(question, &image_b64).await {
+        let agent = self.agent.read().await.clone();
+        let observation = match agent.vision_prompt(question, &image_b64).await {
             Ok(text) => text,
             Err(error) => {
                 warn!(error = %error, "Vision LLM failed");
@@ -442,10 +445,11 @@ impl AiBusService for AiBusServiceImpl {
         &self,
         request: Request<EncryptedWeatherRequest>,
     ) -> Result<Response<EncryptedWeatherResponse>, Status> {
-        let api_key = self.pirate_weather_api_key.as_deref().ok_or_else(|| {
+        let api_key = self.pirate_weather_api_key.read().await;
+        let api_key = api_key.as_deref().ok_or_else(|| {
             info!(">>> EncryptedWeather (no API key configured)");
             Status::unavailable(
-                "weather not configured — set pirate_weather_api_key in config.toml",
+                "weather not configured \u{2014} set PIRATE_WEATHER_API_KEY in the environment or .env, or set pirate_weather_api_key in config.toml",
             )
         })?;
 
