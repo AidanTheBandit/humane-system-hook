@@ -48,6 +48,11 @@ jobs:
       - name: Bootstrap Aliuhook local Maven repo
         run: ./scripts/bootstrap-aliuhook.sh
 
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
