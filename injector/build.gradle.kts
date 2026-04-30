@@ -20,8 +20,8 @@ android {
         applicationId = "com.penumbraos.hook.injector"
         minSdk = 31
         targetSdk = 32
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+        versionName = project.findProperty("versionName") as String? ?: "1.0"
     }
 
     buildTypes {
