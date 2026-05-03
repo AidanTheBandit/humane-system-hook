@@ -1,6 +1,7 @@
 use tonic::{Request, Response, Status};
 use tracing::info;
 
+use crate::proto::privacy::common::{KeyState, KeyStateResponse};
 use crate::proto::privacy::pub_::public_privacy_service_server::PublicPrivacyService;
 use crate::proto::privacy::pub_::*;
 
@@ -22,7 +23,15 @@ impl PublicPrivacyService for PublicPrivacyServiceImpl {
     ) -> Result<Response<ImportKeysResponse>, Status> {
         let inner = request.into_inner();
         info!(">>> PublicPrivacy.ImportKeys ({} keys)", inner.keys.len());
-        Ok(Response::new(ImportKeysResponse::default()))
+        let results = inner
+            .keys
+            .into_iter()
+            .map(|k| KeyStateResponse {
+                kid: k.kid,
+                status: KeyState::KeyImported as i32,
+            })
+            .collect();
+        Ok(Response::new(ImportKeysResponse { results }))
     }
 
     async fn request_keys(
@@ -44,7 +53,15 @@ impl PublicPrivacyService for PublicPrivacyServiceImpl {
             ">>> PublicPrivacy.UpdateKeys ({} updates)",
             inner.updates.len()
         );
-        Ok(Response::new(UpdateKeysResponse::default()))
+        let results = inner
+            .updates
+            .into_iter()
+            .map(|u| KeyStateResponse {
+                kid: u.kid,
+                status: KeyState::KeyUpdated as i32,
+            })
+            .collect();
+        Ok(Response::new(UpdateKeysResponse { results }))
     }
 
     async fn remove_keys(
@@ -53,7 +70,15 @@ impl PublicPrivacyService for PublicPrivacyServiceImpl {
     ) -> Result<Response<RemoveKeysResponse>, Status> {
         let inner = request.into_inner();
         info!(">>> PublicPrivacy.RemoveKeys ({} kids)", inner.kids.len());
-        Ok(Response::new(RemoveKeysResponse::default()))
+        let results = inner
+            .kids
+            .into_iter()
+            .map(|kid| KeyStateResponse {
+                kid,
+                status: KeyState::KeyRemoved as i32,
+            })
+            .collect();
+        Ok(Response::new(RemoveKeysResponse { results }))
     }
 
     async fn sync_keys(
