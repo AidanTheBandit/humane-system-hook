@@ -1,6 +1,7 @@
 [llm]
 provider = "echo"
 model = "gemini-2.5-flash"
+gemini_google_search = false
 
 [server]
 http_bind_addr = "0.0.0.0:8080"

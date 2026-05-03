@@ -32,6 +32,11 @@ pub struct LlmConfig {
 
     /// Base URL — only used for "openai-compatible" provider.
     pub base_url: Option<String>,
+
+    /// When provider == "gemini", enable Google's built-in Search grounding tool.
+    /// No effect for other providers.
+    #[serde(default)]
+    pub gemini_google_search: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -148,6 +153,7 @@ impl Default for LlmConfig {
             model: default_model(),
             api_key: None,
             base_url: None,
+            gemini_google_search: false,
         }
     }
 }

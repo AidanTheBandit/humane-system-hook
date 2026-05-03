@@ -103,10 +103,20 @@ impl LlmAgent {
                     .api_key(&api_key)
                     .http_client(http_client.clone())
                     .build()?;
-                let agent = client
+                let mut builder = client
                     .agent(&config.model)
-                    .preamble(system_prompt)
-                    .build();
+                    .preamble(system_prompt);
+
+                if config.gemini_google_search {
+                    // The Gemini provider's request builder forwards `tools` from
+                    // additional_params into the GenerateContent request.
+                    builder = builder.additional_params(serde_json::json!({
+                        "tools": [{ "google_search": {} }]
+                    }));
+                    info!("Gemini Google Search grounding enabled");
+                }
+
+                let agent = builder.build();
                 info!("Gemini agent ready (model={})", config.model);
                 Ok(LlmAgent::Gemini(agent))
             }

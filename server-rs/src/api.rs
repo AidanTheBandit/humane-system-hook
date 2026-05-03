@@ -222,6 +222,7 @@ struct LlmSettingsResponse {
     model: String,
     has_api_key: bool,
     base_url: Option<String>,
+    gemini_google_search: bool,
 }
 
 #[derive(Serialize)]
@@ -252,6 +253,7 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
             model: config.llm.model.clone(),
             has_api_key: config.llm.resolve_api_key().is_some(),
             base_url: config.llm.base_url.clone(),
+            gemini_google_search: config.llm.gemini_google_search,
         },
         server: ServerSettingsResponse {
             http_bind_addr: config.server.http_bind_addr.clone(),
@@ -285,6 +287,7 @@ struct UpdateLlmSettings {
     model: Option<String>,
     api_key: Option<String>,
     base_url: Option<String>,
+    gemini_google_search: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -379,6 +382,12 @@ async fn update_settings(
                 llm_changed = true;
             }
         }
+        if let Some(v) = llm.gemini_google_search {
+            if v != config.llm.gemini_google_search {
+                config.llm.gemini_google_search = v;
+                llm_changed = true;
+            }
+        }
     }
 
     // --- Server changes ---
@@ -468,6 +477,7 @@ async fn update_settings(
             model: config.llm.model.clone(),
             has_api_key: config.llm.resolve_api_key().is_some(),
             base_url: config.llm.base_url.clone(),
+            gemini_google_search: config.llm.gemini_google_search,
         },
         server: ServerSettingsResponse {
             http_bind_addr: config.server.http_bind_addr.clone(),
@@ -542,6 +552,7 @@ fn persist_config_inner(
                 }
             }
         }
+        table["gemini_google_search"] = toml_edit::value(config.llm.gemini_google_search);
     }
 
     // --- [server] ---
