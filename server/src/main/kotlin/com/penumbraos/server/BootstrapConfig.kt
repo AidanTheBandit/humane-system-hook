@@ -42,7 +42,7 @@ object BootstrapConfig {
             "Failed to create log dir at ${logDir.absolutePath}"
         }
 
-        Log.i(
+        Log.w(
             TAG,
             "Resolved external storage paths: " +
                 "root=${externalRoot.absolutePath}, " +
@@ -53,7 +53,7 @@ object BootstrapConfig {
         )
 
         if (configFile.exists()) {
-            Log.i(TAG, "Using existing canonical config at ${configFile.absolutePath}")
+            Log.w(TAG, "Using existing canonical config at ${configFile.absolutePath}")
             applyAndroidManagedDefaults(
                 configFile,
                 managedFields(mediaDir, dbFile, logDir),
@@ -68,7 +68,7 @@ object BootstrapConfig {
             .replace(LOG_DIR_PLACEHOLDER, logDir.absolutePath)
 
         configFile.writeText(renderedToml)
-        Log.i(TAG, "Wrote canonical config to ${configFile.absolutePath}")
+        Log.w(TAG, "Wrote canonical config to ${configFile.absolutePath}")
         return configFile.absolutePath
     }
 
@@ -116,7 +116,7 @@ object BootstrapConfig {
             val bak = File(configFile.parentFile, "${configFile.name}.bak")
             bak.writeText(original)
             configFile.writeText(text)
-            Log.i(
+            Log.w(
                 TAG,
                 "Migrated ${configFile.absolutePath}: added missing Android-managed defaults",
             )

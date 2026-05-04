@@ -33,9 +33,9 @@ object DatadogBypass {
             arrayOf(android.content.Context::class.java, configClass, String::class.java),
         ) { param ->
             param.result = null  // short-circuit: void method, return immediately
-            Log.i(TAG, "  DatadogManager.initialize() blocked")
+            Log.w(TAG, "  DatadogManager.initialize() blocked")
         }
 
-        Log.i(TAG, "  Datadog bypass installed")
+        Log.w(TAG, "  Datadog bypass installed")
     }
 }

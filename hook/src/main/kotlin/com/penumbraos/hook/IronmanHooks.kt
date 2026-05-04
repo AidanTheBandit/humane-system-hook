@@ -21,8 +21,8 @@ object IronmanHooks {
     private const val TAG = "PenumbraHook"
 
     fun install(cl: ClassLoader) {
-        Log.i(TAG, "Installing ironman hooks...")
-        Log.i(TAG, "  Mock server: ${ChannelFactoryBypass.MOCK_SERVER_URI}")
+        Log.w(TAG, "Installing ironman hooks...")
+        Log.w(TAG, "  Mock server: ${ChannelFactoryBypass.MOCK_SERVER_URI}")
 
         // Credential hooks must be installed first — without these, ironman
         // crash-loops before ChannelFactory hooks ever get a chance to run.
@@ -65,7 +65,7 @@ object IronmanHooks {
         // Bypass blocking IWlcService.disableTx binder calls
         WirelessChargingBypass.install(cl)
 
-        Log.i(TAG, "Ironman hooks installed")
+        Log.w(TAG, "Ironman hooks installed")
     }
 
     /**
@@ -108,7 +108,7 @@ object IronmanHooks {
                     }
                 }
             })
-            Log.i(TAG, "  Hooked $className.getCertificateChain()")
+            Log.w(TAG, "  Hooked $className.getCertificateChain()")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook getCertificateChain: ${t.message}")
         }
@@ -128,7 +128,7 @@ object IronmanHooks {
                     }
                 }
             })
-            Log.i(TAG, "  Hooked $className.getPrivateKey()")
+            Log.w(TAG, "  Hooked $className.getPrivateKey()")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook getPrivateKey: ${t.message}")
         }
@@ -154,11 +154,11 @@ object IronmanHooks {
                     val app = param.thisObject as Application
                     val processName = app.applicationInfo?.processName ?: ""
                     val myProcess = Application.getProcessName() ?: ""
-                    Log.i(TAG, "Application.onCreate() — process=$myProcess")
+                    Log.w(TAG, "Application.onCreate() — process=$myProcess")
 
                     // Only run in main process (not :voiceinteractor)
                     if (myProcess.contains(":")) {
-                        Log.i(TAG, "  Skipping provisioning fix in subprocess: $myProcess")
+                        Log.w(TAG, "  Skipping provisioning fix in subprocess: $myProcess")
                         return
                     }
 
@@ -169,7 +169,7 @@ object IronmanHooks {
                     }
                 }
             })
-            Log.i(TAG, "  Hooked MainApplication.onCreate() for provisioning fix")
+            Log.w(TAG, "  Hooked MainApplication.onCreate() for provisioning fix")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook MainApplication.onCreate(): ${t.message}")
             // Fallback: try hooking android.app.Application.onCreate() directly
@@ -189,7 +189,7 @@ object IronmanHooks {
                         }
                     }
                 })
-                Log.i(TAG, "  Hooked Application.onCreate() (fallback) for provisioning fix")
+                Log.w(TAG, "  Hooked Application.onCreate() (fallback) for provisioning fix")
             } catch (t2: Throwable) {
                 Log.e(TAG, "  Failed to hook Application.onCreate() fallback: ${t2.message}")
             }
@@ -210,18 +210,18 @@ object IronmanHooks {
         val key = "humane.settings.global.DUC_PROVISIONED"
         val current = Settings.Global.getInt(resolver, key, 0)
 
-        Log.i(TAG, "=== Provisioning state check: DUC_PROVISIONED=$current ===")
+        Log.w(TAG, "=== Provisioning state check: DUC_PROVISIONED=$current ===")
 
         if (current == 0) {
-            Log.i(TAG, "  Device not yet provisioned — letting onboarding run naturally")
+            Log.w(TAG, "  Device not yet provisioned — letting onboarding run naturally")
             return
         }
 
         // Already provisioned — ensure baseline mode is NORMAL after reboot
-        Log.i(TAG, "  Device already provisioned — ensuring NORMAL mode")
+        Log.w(TAG, "  Device already provisioned — ensuring NORMAL mode")
         fixBaselineMode(cl)
 
-        Log.i(TAG, "=== Provisioning fix complete ===")
+        Log.w(TAG, "=== Provisioning fix complete ===")
     }
 
     /**
@@ -263,17 +263,17 @@ object IronmanHooks {
             val getBaselineMethod = service.javaClass.getMethod("getBaselineMode")
             val currentBaseline = getBaselineMethod.invoke(service) as Byte
 
-            Log.i(TAG, "  Current baseline mode: $currentBaseline")
+            Log.w(TAG, "  Current baseline mode: $currentBaseline")
 
             if (currentBaseline == 0.toByte()) {
-                Log.i(TAG, "  Baseline already NORMAL (0), no change needed")
+                Log.w(TAG, "  Baseline already NORMAL (0), no change needed")
                 return
             }
 
             // Set baseline to NORMAL (0)
             val setBaselineMethod = service.javaClass.getMethod("setBaselineMode", Byte::class.javaPrimitiveType)
             setBaselineMethod.invoke(service, 0.toByte())
-            Log.i(TAG, "  setBaselineMode(0) — SUCCESS — mode transitioned from $currentBaseline to NORMAL")
+            Log.w(TAG, "  setBaselineMode(0) — SUCCESS — mode transitioned from $currentBaseline to NORMAL")
 
         } catch (t: Throwable) {
             Log.e(TAG, "  setBaselineMode failed: ${t.javaClass.simpleName}: ${t.message}")
@@ -305,16 +305,16 @@ object IronmanHooks {
             val key = "humane.settings.global.DUC_PROVISIONED"
             val current = Settings.Global.getInt(resolver, key, 0)
 
-            Log.i(TAG, "  Current DUC_PROVISIONED: $current")
+            Log.w(TAG, "  Current DUC_PROVISIONED: $current")
 
             if (current != 0) {
-                Log.i(TAG, "  DUC_PROVISIONED already set ($current), no change needed")
+                Log.w(TAG, "  DUC_PROVISIONED already set ($current), no change needed")
                 return
             }
 
             val success = Settings.Global.putInt(resolver, key, 1)
             if (success) {
-                Log.i(TAG, "  DUC_PROVISIONED set to 1 — SUCCESS")
+                Log.w(TAG, "  DUC_PROVISIONED set to 1 — SUCCESS")
             } else {
                 Log.w(TAG, "  DUC_PROVISIONED putInt returned false — may lack permission")
             }
@@ -355,11 +355,11 @@ object IronmanHooks {
                         param.result = ByteArray(64) { 0x01 }
                         Log.w(TAG, "  DAC generateVerifierSignature() threw ${param.throwable?.javaClass?.simpleName} — returning dummy signature")
                     } else {
-                        Log.i(TAG, "  DAC generateVerifierSignature() succeeded with real signature")
+                        Log.w(TAG, "  DAC generateVerifierSignature() succeeded with real signature")
                     }
                 }
             })
-            Log.i(TAG, "  Hooked $className.generateVerifierSignature() (safety net)")
+            Log.w(TAG, "  Hooked $className.generateVerifierSignature() (safety net)")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook generateVerifierSignature: ${t.message}")
         }
@@ -409,7 +409,7 @@ object IronmanHooks {
             Log.w(TAG, "  Failed to hook RemoteMetricsService.finishReport: ${t.message}")
         }
 
-        Log.i(TAG, "  RemoteMetricsService hooks installed (metrics silenced)")
+        Log.w(TAG, "  RemoteMetricsService hooks installed (metrics silenced)")
     }
 
 }

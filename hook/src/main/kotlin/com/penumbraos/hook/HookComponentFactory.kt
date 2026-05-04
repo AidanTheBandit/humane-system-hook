@@ -43,10 +43,10 @@ class HookComponentFactory : AppComponentFactory() {
     }
 
     override fun instantiateApplication(cl: ClassLoader, className: String): Application {
-        Log.i(TAG, "HookComponentFactory.instantiateApplication()")
-        Log.i(TAG, "  className=$className")
-        Log.i(TAG, "  classLoader=$cl")
-        Log.i(TAG, "  process=${android.os.Process.myPid()}")
+        Log.w(TAG, "HookComponentFactory.instantiateApplication()")
+        Log.w(TAG, "  className=$className")
+        Log.w(TAG, "  classLoader=$cl")
+        Log.w(TAG, "  process=${android.os.Process.myPid()}")
 
         try {
             loadNativeLibs()
@@ -69,7 +69,7 @@ class HookComponentFactory : AppComponentFactory() {
             } catch (_: ClassNotFoundException) {
                 continue
             }
-            Log.i(TAG, "  Module matched: $probeClass")
+            Log.w(TAG, "  Module matched: $probeClass")
             try {
                 install(cl)
                 installed++
@@ -80,7 +80,7 @@ class HookComponentFactory : AppComponentFactory() {
         if (installed == 0) {
             Log.w(TAG, "  No hook modules matched this process")
         } else {
-            Log.i(TAG, "  $installed hook module(s) installed")
+            Log.w(TAG, "  $installed hook module(s) installed")
         }
     }
 
@@ -104,7 +104,7 @@ class HookComponentFactory : AppComponentFactory() {
             return
         }
 
-        Log.i(TAG, "Loading native libs from: $libDir")
+        Log.w(TAG, "Loading native libs from: $libDir")
 
         // AliuHook native libs — in dependency order
         val aliuHookLibs = listOf("libc++_shared.so", "liblsplant.so", "libaliuhook.so")
@@ -112,7 +112,7 @@ class HookComponentFactory : AppComponentFactory() {
             val libFile = File(libDir, libName)
             if (libFile.exists()) {
                 System.load(libFile.absolutePath)
-                Log.i(TAG, "  Loaded $libName")
+                Log.w(TAG, "  Loaded $libName")
             } else {
                 Log.w(TAG, "  $libName not found in $libDir")
             }
@@ -125,7 +125,7 @@ class HookComponentFactory : AppComponentFactory() {
         if (fridaLib.exists()) {
             try {
                 System.load(fridaLib.absolutePath)
-                Log.i(TAG, "  Loaded libfrida-gadget.so — Frida listen server starting on :27042")
+                Log.w(TAG, "  Loaded libfrida-gadget.so — Frida listen server starting on :27042")
             } catch (t: Throwable) {
                 Log.e(TAG, "  Failed to load Frida Gadget (non-fatal, continuing)", t)
             }
@@ -181,7 +181,7 @@ class HookComponentFactory : AppComponentFactory() {
      * delegate through it.
      */
     private fun createApplication(cl: ClassLoader, className: String): Application {
-        Log.i(TAG, "Instantiating $className")
+        Log.w(TAG, "Instantiating $className")
         return cl.loadClass(className).getDeclaredConstructor().newInstance() as Application
     }
 }

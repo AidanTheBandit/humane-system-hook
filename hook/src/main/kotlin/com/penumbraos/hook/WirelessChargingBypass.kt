@@ -53,7 +53,7 @@ object WirelessChargingBypass {
                     }
                 })
                 val sig = method.parameterTypes.joinToString(",") { it.simpleName }
-                Log.i(TAG, "  Hooked IWlcService\$Stub\$Proxy.${method.name}($sig) — short-circuited")
+                Log.w(TAG, "  Hooked IWlcService\$Stub\$Proxy.${method.name}($sig) — short-circuited")
                 hooked++
             } catch (t: Throwable) {
                 Log.e(TAG, "  Failed to hook ${method.name} overload: ${t.message}")
@@ -64,7 +64,7 @@ object WirelessChargingBypass {
             Log.w(TAG, "  No disableTx* overloads found on $PROXY_CLASS")
         } else {
             installed = true
-            Log.i(TAG, "  WLC disableTx bypass installed ($hooked overload(s))")
+            Log.w(TAG, "  WLC disableTx bypass installed ($hooked overload(s))")
         }
     }
 }

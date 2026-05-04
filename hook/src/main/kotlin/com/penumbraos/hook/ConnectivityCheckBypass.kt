@@ -63,7 +63,7 @@ object ConnectivityCheckBypass {
             }
         }
 
-        Log.i(TAG, "  Connectivity check redirected to $PROBE_URL")
+        Log.w(TAG, "  Connectivity check redirected to $PROBE_URL")
     }
 
     private fun enumValue(enumClass: Class<*>, name: String): Any? {
@@ -94,7 +94,7 @@ object ConnectivityCheckBypass {
             // as CONNECTED based on a stale code.
             try { conn.inputStream.close() } catch (_: Throwable) { /* ignored */ }
             val code = conn.responseCode
-            Log.d(TAG, "Connectivity probe ($PROBE_URL) -> $code")
+            Log.w(TAG, "Connectivity probe ($PROBE_URL) -> $code")
             when {
                 code == 204 -> connected
                 code in REDIRECT_CODES -> walledGarden
@@ -102,7 +102,7 @@ object ConnectivityCheckBypass {
                 else -> failure
             }
         } catch (t: Throwable) {
-            Log.d(TAG, "Connectivity probe failed: ${t.javaClass.simpleName}: ${t.message}")
+            Log.w(TAG, "Connectivity probe failed: ${t.javaClass.simpleName}: ${t.message}")
             failure
         } finally {
             try { conn?.disconnect() } catch (_: Throwable) { /* ignored */ }

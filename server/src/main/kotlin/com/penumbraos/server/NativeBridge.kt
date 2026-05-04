@@ -23,7 +23,7 @@ object NativeBridge {
             "Server executable not found at ${executable.absolutePath}"
         }
 
-        Log.i(
+        Log.w(
             TAG,
             "Launching server executable: path=${executable.absolutePath}, canExecute=${executable.canExecute()}, config=$configPath",
         )
@@ -38,7 +38,7 @@ object NativeBridge {
         val processLabel = Integer.toHexString(System.identityHashCode(process))
         pumpLogs(processLabel, process.inputStream)
 
-        Log.i(TAG, "Spawned server process id=$processLabel")
+        Log.w(TAG, "Spawned server process id=$processLabel")
         return process
     }
 
@@ -48,7 +48,7 @@ object NativeBridge {
         }
 
         val processLabel = Integer.toHexString(System.identityHashCode(process))
-        Log.i(TAG, "Stopping server process id=$processLabel")
+        Log.w(TAG, "Stopping server process id=$processLabel")
         process.destroy()
 
         if (!process.waitFor(STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
@@ -94,8 +94,8 @@ object NativeBridge {
         when {
             line.startsWith("ERROR") || line.startsWith("error") -> Log.e(TAG, line)
             line.startsWith("WARN") || line.startsWith("warn") -> Log.w(TAG, line)
-            line.startsWith("DEBUG") || line.startsWith("debug") -> Log.d(TAG, line)
-            else -> Log.i(TAG, line)
+            line.startsWith("DEBUG") || line.startsWith("debug") -> Log.w(TAG, line)
+            else -> Log.w(TAG, line)
         }
     }
 }

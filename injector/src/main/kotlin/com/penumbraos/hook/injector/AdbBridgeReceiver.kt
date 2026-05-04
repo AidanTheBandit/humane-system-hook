@@ -23,7 +23,7 @@ class AdbBridgeReceiver : BroadcastReceiver() {
         try {
             if (intent.action != ACTION_ADB_BRIDGE) return
 
-            Log.i(TAG, "ADB_BRIDGE broadcast received, starting bridge on background thread")
+            Log.w(TAG, "ADB_BRIDGE broadcast received, starting bridge on background thread")
 
             val appContext = context.applicationContext
             Thread({

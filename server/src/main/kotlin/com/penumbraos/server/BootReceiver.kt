@@ -15,7 +15,7 @@ class BootReceiver : BroadcastReceiver() {
         try {
             if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
-            Log.i(TAG, "BOOT_COMPLETED received, starting foreground service")
+            Log.w(TAG, "BOOT_COMPLETED received, starting foreground service")
             ServerService.start(context)
         } catch (t: Throwable) {
             Log.e(TAG, "BootReceiver.onReceive failed", t)

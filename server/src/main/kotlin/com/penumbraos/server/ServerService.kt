@@ -96,7 +96,7 @@ class ServerService : Service() {
                 acquire()
             }
             multicastLock = lock
-            Log.i(TAG, "Acquired Wi-Fi multicast lock")
+            Log.w(TAG, "Acquired Wi-Fi multicast lock")
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to acquire multicast lock", t)
         }

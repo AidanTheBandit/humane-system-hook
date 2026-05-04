@@ -67,7 +67,7 @@ object ServerRuntime {
 
         try {
             NativeBridge.stop(toStop)
-            Log.i(TAG, "Server runtime stop requested")
+            Log.w(TAG, "Server runtime stop requested")
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to stop server process", t)
         }
@@ -81,12 +81,12 @@ object ServerRuntime {
         synchronized(stateLock) {
             val existing = process
             if (existing?.isAlive == true) {
-                Log.i(TAG, "Server runtime already running, ignoring start")
+                Log.w(TAG, "Server runtime already running, ignoring start")
                 return
             }
 
             process = NativeBridge.start(context, configPath)
-            Log.i(TAG, "Server runtime started")
+            Log.w(TAG, "Server runtime started")
             notifyState(true)
         }
     }

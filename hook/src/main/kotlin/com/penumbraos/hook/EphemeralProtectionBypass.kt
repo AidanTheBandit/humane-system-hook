@@ -56,7 +56,7 @@ object EphemeralProtectionBypass {
 
         hookDecrypt(epmClass, channelIdClass, encryptedDataClass, cl)
 
-        Log.i(TAG, "  Ephemeral protection bypass installed on $epmClassName")
+        Log.w(TAG, "  Ephemeral protection bypass installed on $epmClassName")
     }
 
     // ─── prepare() hooks ──────────────────────────────────────────────
@@ -70,7 +70,7 @@ object EphemeralProtectionBypass {
                     param.result = true
                 }
             })
-            Log.i(TAG, "  Hooked EphemeralProtectionManager.prepare(EphemeralChannelId)")
+            Log.w(TAG, "  Hooked EphemeralProtectionManager.prepare(EphemeralChannelId)")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook prepare(EphemeralChannelId): ${t.message}")
         }
@@ -87,7 +87,7 @@ object EphemeralProtectionBypass {
                     param.result = true
                 }
             })
-            Log.i(TAG, "  Hooked EphemeralProtectionManager.prepare(EphemeralChannelId, Duration)")
+            Log.w(TAG, "  Hooked EphemeralProtectionManager.prepare(EphemeralChannelId, Duration)")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook prepare(EphemeralChannelId, Duration): ${t.message}")
         }
@@ -166,7 +166,7 @@ object EphemeralProtectionBypass {
                     }
                 }
             })
-            Log.i(TAG, "  Hooked EphemeralProtectionManager.encrypt(EphemeralChannelId, GeneratedMessageLite)")
+            Log.w(TAG, "  Hooked EphemeralProtectionManager.encrypt(EphemeralChannelId, GeneratedMessageLite)")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook encrypt(2-arg): ${t.message}")
         }
@@ -201,7 +201,7 @@ object EphemeralProtectionBypass {
                     }
                 }
             })
-            Log.i(TAG, "  Hooked EphemeralProtectionManager.encrypt(EphemeralChannelId, GeneratedMessageLite, Duration)")
+            Log.w(TAG, "  Hooked EphemeralProtectionManager.encrypt(EphemeralChannelId, GeneratedMessageLite, Duration)")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook encrypt(3-arg): ${t.message}")
         }
@@ -254,7 +254,7 @@ object EphemeralProtectionBypass {
                     }
                 }
             })
-            Log.i(TAG, "  Hooked EphemeralProtectionManager.decrypt(EphemeralChannelId, EncryptedData)")
+            Log.w(TAG, "  Hooked EphemeralProtectionManager.decrypt(EphemeralChannelId, EncryptedData)")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook decrypt: ${t.message}")
         }

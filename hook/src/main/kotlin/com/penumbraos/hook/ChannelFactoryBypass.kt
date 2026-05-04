@@ -46,14 +46,14 @@ object ChannelFactoryBypass {
                 if (param.throwable == null) {
                     val original = param.result
                     param.result = MOCK_SERVER_URI
-                    Log.i(TAG, "  ChannelFactory.getGatewayUri() redirected: $original -> $MOCK_SERVER_URI")
+                    Log.w(TAG, "  ChannelFactory.getGatewayUri() redirected: $original -> $MOCK_SERVER_URI")
                 }
             }
             hooked++
         }
 
         if (hooked > 0) {
-            Log.i(TAG, "  ChannelFactory bypass installed ($hooked class(es) hooked)")
+            Log.w(TAG, "  ChannelFactory bypass installed ($hooked class(es) hooked)")
         } else {
             Log.w(TAG, "  No ChannelFactory classes found on classpath")
         }

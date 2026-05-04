@@ -10,11 +10,11 @@ object SettingsHooks {
     private const val TAG = "PenumbraHook"
 
     fun install(cl: ClassLoader) {
-        Log.i(TAG, "Installing settings hooks...")
+        Log.w(TAG, "Installing settings hooks...")
 
         TcmSilencer.install(cl)
         ConnectivityCheckBypass.install(cl)
 
-        Log.i(TAG, "Settings hooks installed")
+        Log.w(TAG, "Settings hooks installed")
     }
 }

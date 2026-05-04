@@ -39,7 +39,7 @@ class InjectReceiver : BroadcastReceiver() {
             return
         }
 
-        Log.i(TAG, "Received INJECT request for: $packageName")
+        Log.w(TAG, "Received INJECT request for: $packageName")
 
         try {
             // Initialize PMS references on first use
@@ -72,7 +72,7 @@ class InjectReceiver : BroadcastReceiver() {
     }
 
     private fun forceStopAndRelaunch(context: Context, packageName: String) {
-        Log.i(TAG, "Force-stopping $packageName...")
+        Log.w(TAG, "Force-stopping $packageName...")
 
         // forceStopPackage is @SystemApi, not in the compile SDK. Use reflection.
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -84,17 +84,17 @@ class InjectReceiver : BroadcastReceiver() {
         // Let the process fully die before relaunching
         Thread.sleep(500)
 
-        Log.i(TAG, "Relaunching $packageName...")
+        Log.w(TAG, "Relaunching $packageName...")
         val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
         if (launchIntent != null) {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(launchIntent)
-            Log.i(TAG, "Launched via launch intent")
+            Log.w(TAG, "Launched via launch intent")
         } else {
             // For services like ironman that have no launcher activity:
             // Android will auto-restart persistent/foreground services after force-stop.
             // If that doesn't happen, we could start CentralService explicitly.
-            Log.i(TAG, "No launch intent for $packageName, relying on system auto-restart")
+            Log.w(TAG, "No launch intent for $packageName, relying on system auto-restart")
         }
     }
 }

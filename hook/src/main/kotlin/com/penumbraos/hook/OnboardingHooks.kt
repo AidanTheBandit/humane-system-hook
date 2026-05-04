@@ -23,14 +23,14 @@ object OnboardingHooks {
     private val OPAQUE_SESSION_KEY = ByteArray(32) { 0x42 }
 
     fun install(cl: ClassLoader) {
-        Log.i(TAG, "Installing onboarding hooks...")
+        Log.w(TAG, "Installing onboarding hooks...")
 
         hookOpaque(cl)
 
         ConnectivityCheckBypass.install(cl)
         WirelessChargingBypass.install(cl)
 
-        Log.i(TAG, "Onboarding hooks installed")
+        Log.w(TAG, "Onboarding hooks installed")
     }
 
     /**
@@ -60,39 +60,39 @@ object OnboardingHooks {
         // clientLoginNew() -> long
         HookUtils.hookMethodBefore(clazz, "clientLoginNew", emptyArray()) { param ->
             param.result = 1L
-            Log.i(TAG, "  OPAQUE: clientLoginNew() -> 1 (stub pointer)")
+            Log.w(TAG, "  OPAQUE: clientLoginNew() -> 1 (stub pointer)")
         }
 
         // clientLoginStart(long, String) -> byte[]
         HookUtils.hookMethodBefore(clazz, "clientLoginStart", arrayOf(Long::class.javaPrimitiveType!!, String::class.java)) { param ->
             param.result = placeholder32.clone()
-            Log.i(TAG, "  OPAQUE: clientLoginStart() -> 32-byte placeholder KE1")
+            Log.w(TAG, "  OPAQUE: clientLoginStart() -> 32-byte placeholder KE1")
         }
 
         // clientLoginFinish(long, String, byte[]) -> byte[]
         HookUtils.hookMethodBefore(clazz, "clientLoginFinish", arrayOf(Long::class.javaPrimitiveType!!, String::class.java, ByteArray::class.java)) { param ->
             param.result = placeholder32.clone()
-            Log.i(TAG, "  OPAQUE: clientLoginFinish() -> 32-byte placeholder KE3 (non-null = success)")
+            Log.w(TAG, "  OPAQUE: clientLoginFinish() -> 32-byte placeholder KE3 (non-null = success)")
         }
 
         // clientLoginGetSessionKey(long) -> byte[]
         HookUtils.hookMethodBefore(clazz, "clientLoginGetSessionKey", arrayOf(Long::class.javaPrimitiveType!!)) { param ->
             param.result = OPAQUE_SESSION_KEY.clone()
-            Log.i(TAG, "  OPAQUE: clientLoginGetSessionKey() -> fixed 32-byte session key")
+            Log.w(TAG, "  OPAQUE: clientLoginGetSessionKey() -> fixed 32-byte session key")
         }
 
         // clientLoginGetExportKey(long) -> byte[]
         HookUtils.hookMethodBefore(clazz, "clientLoginGetExportKey", arrayOf(Long::class.javaPrimitiveType!!)) { param ->
             param.result = placeholder32.clone()
-            Log.i(TAG, "  OPAQUE: clientLoginGetExportKey() -> 32-byte placeholder export key")
+            Log.w(TAG, "  OPAQUE: clientLoginGetExportKey() -> 32-byte placeholder export key")
         }
 
         // clientLoginDestroy(long) -> void
         HookUtils.hookMethodBefore(clazz, "clientLoginDestroy", arrayOf(Long::class.javaPrimitiveType!!)) { param ->
             param.result = null
-            Log.i(TAG, "  OPAQUE: clientLoginDestroy() -> no-op")
+            Log.w(TAG, "  OPAQUE: clientLoginDestroy() -> no-op")
         }
 
-        Log.i(TAG, "  OPAQUE hooks installed — all native crypto bypassed")
+        Log.w(TAG, "  OPAQUE hooks installed — all native crypto bypassed")
     }
 }

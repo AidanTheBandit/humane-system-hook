@@ -55,11 +55,11 @@ class BootInjectionReceiver : BroadcastReceiver() {
 
         // Check kill switch
         if (isDisabled()) {
-            Log.i(TAG, "Boot injection DISABLED via $PROP_DISABLE")
+            Log.w(TAG, "Boot injection DISABLED via $PROP_DISABLE")
             return
         }
 
-        Log.i(TAG, "Boot injection triggered by $action")
+        Log.w(TAG, "Boot injection triggered by $action")
 
         // Read target package list from hook APK's manifest meta-data
         val targetPackages = loadTargetPackages(context)
@@ -67,7 +67,7 @@ class BootInjectionReceiver : BroadcastReceiver() {
             Log.e(TAG, "No target packages found, skipping boot injection")
             return
         }
-        Log.i(TAG, "Target packages from hook APK: $targetPackages")
+        Log.w(TAG, "Target packages from hook APK: $targetPackages")
 
         // Initialize PMS references
         PackageInjector.ensureInitialized()
@@ -88,7 +88,7 @@ class BootInjectionReceiver : BroadcastReceiver() {
 
         disableMemfaultDaemons()
 
-        Log.i(TAG, "Boot injection complete")
+        Log.w(TAG, "Boot injection complete")
     }
 
     /**
@@ -111,7 +111,7 @@ class BootInjectionReceiver : BroadcastReceiver() {
             for ((key, value) in props) {
                 try {
                     setMethod.invoke(null, key, value)
-                    Log.i(TAG, "Set $key=$value")
+                    Log.w(TAG, "Set $key=$value")
                 } catch (t: Throwable) {
                     Log.w(TAG, "Failed to set $key: ${t.message}")
                 }
@@ -127,7 +127,7 @@ class BootInjectionReceiver : BroadcastReceiver() {
      */
     private fun injectPackage(context: Context, packageName: String, forceRestart: Boolean) {
         if (packageName in injectedPackages) {
-            Log.i(TAG, "Already injected $packageName this boot, skipping")
+            Log.w(TAG, "Already injected $packageName this boot, skipping")
             return
         }
 
@@ -138,13 +138,13 @@ class BootInjectionReceiver : BroadcastReceiver() {
         }
 
         injectedPackages.add(packageName)
-        Log.i(TAG, "Injected $packageName")
+        Log.w(TAG, "Injected $packageName")
 
         // On BOOT_COMPLETED: targets may already be running from a LOCKED_BOOT_COMPLETED
         // launch that happened before our injection. Force-stop + relaunch to pick up hooks.
         // On LOCKED_BOOT_COMPLETED: targets haven't started yet, no restart needed.
         if (forceRestart) {
-            Log.i(TAG, "Force-restarting $packageName to pick up hooks after BOOT_COMPLETED")
+            Log.w(TAG, "Force-restarting $packageName to pick up hooks after BOOT_COMPLETED")
             Thread {
                 try {
                     forceStopAndRelaunch(context, packageName)
@@ -168,9 +168,9 @@ class BootInjectionReceiver : BroadcastReceiver() {
         if (launchIntent != null) {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(launchIntent)
-            Log.i(TAG, "Relaunched $packageName via launch intent")
+            Log.w(TAG, "Relaunched $packageName via launch intent")
         } else {
-            Log.i(TAG, "No launch intent for $packageName, relying on system auto-restart")
+            Log.w(TAG, "No launch intent for $packageName, relying on system auto-restart")
         }
     }
 

@@ -15,11 +15,11 @@ object KryptoHooks {
     private const val TAG = "PenumbraHook"
 
     fun install(cl: ClassLoader) {
-        Log.i(TAG, "Installing krypto hooks...")
+        Log.w(TAG, "Installing krypto hooks...")
 
         ChannelFactoryBypass.install(cl)
         DataProtectorBypass.install(cl)
 
-        Log.i(TAG, "Krypto hooks installed")
+        Log.w(TAG, "Krypto hooks installed")
     }
 }

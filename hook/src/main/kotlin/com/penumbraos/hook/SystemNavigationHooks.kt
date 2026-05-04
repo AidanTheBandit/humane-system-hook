@@ -10,12 +10,12 @@ object SystemNavigationHooks {
     private const val TAG = "PenumbraHook"
 
     fun install(cl: ClassLoader) {
-        Log.i(TAG, "Installing system navigation hooks...")
+        Log.w(TAG, "Installing system navigation hooks...")
 
         TcmSilencer.install(cl)
 
         ConnectivityCheckBypass.install(cl)
 
-        Log.i(TAG, "System navigation hooks installed")
+        Log.w(TAG, "System navigation hooks installed")
     }
 }

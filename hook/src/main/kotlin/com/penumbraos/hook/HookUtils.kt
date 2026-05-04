@@ -32,7 +32,7 @@ object HookUtils {
                     beforeHook(param)
                 }
             })
-            Log.i(TAG, "  Hooked ${clazz.simpleName}.$name()")
+            Log.w(TAG, "  Hooked ${clazz.simpleName}.$name()")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook ${clazz.simpleName}.$name: ${t.message}")
         }
@@ -55,7 +55,7 @@ object HookUtils {
                     afterHook(param)
                 }
             })
-            Log.i(TAG, "  Hooked ${clazz.simpleName}.$name()")
+            Log.w(TAG, "  Hooked ${clazz.simpleName}.$name()")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook ${clazz.simpleName}.$name: ${t.message}")
         }

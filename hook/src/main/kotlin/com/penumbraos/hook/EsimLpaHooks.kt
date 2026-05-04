@@ -65,13 +65,13 @@ object EsimLpaHooks {
     private lateinit var storeMetadataRequestClass: Class<*>
 
     fun install(cl: ClassLoader) {
-        Log.i(TAG, "Installing eSIM LPA hooks...")
+        Log.w(TAG, "Installing eSIM LPA hooks...")
 
         try {
             resolveClasses(cl)
             hookCarrierLock(cl)
             hookBF25Parser(cl)
-            Log.i(TAG, "eSIM LPA hooks installed")
+            Log.w(TAG, "eSIM LPA hooks installed")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to install eSIM LPA hooks", t)
         }
@@ -138,7 +138,7 @@ object EsimLpaHooks {
         )
         smrSetProfileOwner = storeMetadataRequestClass.getMethod("setProfileOwner", operatorIdClass)
 
-        Log.i(TAG, "  eSIM LPA reflection resolved successfully")
+        Log.w(TAG, "  eSIM LPA reflection resolved successfully")
     }
 
 
@@ -161,7 +161,7 @@ object EsimLpaHooks {
             arrayOf(Intent::class.java, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!)
         ) { _ ->
             if (bypassActive.getAndSet(false)) {
-                Log.d(TAG, "  Carrier lock bypass: cleared stale flag on new intent")
+                Log.w(TAG, "  Carrier lock bypass: cleared stale flag on new intent")
             }
         }
 
@@ -172,7 +172,7 @@ object EsimLpaHooks {
             arrayOf(String::class.java)
         ) { _ ->
             bypassActive.set(true)
-            Log.i(TAG, "  Carrier lock bypass: activated for downloadVerifyAndEnableProfile")
+            Log.w(TAG, "  Carrier lock bypass: activated for downloadVerifyAndEnableProfile")
         }
 
         // Patch getProfileName() only when bypass is active
@@ -181,12 +181,12 @@ object EsimLpaHooks {
                 val hexString = param.result
                 if (hexString != null) {
                     setValueMethod.invoke(hexString, HUMANE_HEX)
-                    Log.d(TAG, "  Carrier lock bypass: getProfileName() -> \"Humane\"")
+                    Log.w(TAG, "  Carrier lock bypass: getProfileName() -> \"Humane\"")
                 }
             }
         }
 
-        Log.i(TAG, "  Carrier lock bypass installed")
+        Log.w(TAG, "  Carrier lock bypass installed")
     }
 
     /**
@@ -209,7 +209,7 @@ object EsimLpaHooks {
             param.result = parseBF25(fillerEngine, str, i)
         }
 
-        Log.i(TAG, "  BF25 parser fix installed (FillerEngine.fillStoreMetadataRequest)")
+        Log.w(TAG, "  BF25 parser fix installed (FillerEngine.fillStoreMetadataRequest)")
     }
 
     /**
@@ -231,7 +231,7 @@ object EsimLpaHooks {
         val dataStart = i4 + lengthFieldSize
         val dataEnd = dataStart + lengthBytes * 2
 
-        Log.d(TAG, "  BF25 parser: length=$lengthBytes bytes, dataStart=$dataStart, dataEnd=$dataEnd")
+        Log.w(TAG, "  BF25 parser: length=$lengthBytes bytes, dataStart=$dataStart, dataEnd=$dataEnd")
 
         var offset = dataStart
         var iterations = 0
@@ -264,7 +264,7 @@ object EsimLpaHooks {
                 tagNibbles = 2
             }
 
-            Log.d(TAG, "  BF25 parser: iteration=$iterations, offset=$offset, tag=$tag")
+            Log.w(TAG, "  BF25 parser: iteration=$iterations, offset=$offset, tag=$tag")
 
             var consumed = 0
 
@@ -363,7 +363,7 @@ object EsimLpaHooks {
             Log.w(TAG, "  BF25 parser: max iterations ($MAX_ITERATIONS) reached")
         }
 
-        Log.i(TAG, "  BF25 parser: completed, processed $iterations tags")
+        Log.w(TAG, "  BF25 parser: completed, processed $iterations tags")
         return smr
     }
 

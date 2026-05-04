@@ -24,7 +24,7 @@ object TcmSilencer {
     private const val TAG = "PenumbraHook"
 
     fun install(cl: ClassLoader) {
-        Log.i(TAG, "Installing TCM silencer...")
+        Log.w(TAG, "Installing TCM silencer...")
 
         try {
             val timerMonitorClass = Class.forName("com.android.okhttp.TcmIdleTimerMonitor")
@@ -38,10 +38,10 @@ object TcmSilencer {
                     // This stops it from loading tcmclient.jar via PathClassLoader
                     // and starting the TcmReceiver socket thread.
                     param.result = null
-                    Log.i(TAG, "  TcmIdleTimerMonitor constructor suppressed")
+                    Log.w(TAG, "  TcmIdleTimerMonitor constructor suppressed")
                 }
             })
-            Log.i(TAG, "  Hooked TcmIdleTimerMonitor constructor")
+            Log.w(TAG, "  Hooked TcmIdleTimerMonitor constructor")
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook TcmIdleTimerMonitor: ${t.message}")
         }

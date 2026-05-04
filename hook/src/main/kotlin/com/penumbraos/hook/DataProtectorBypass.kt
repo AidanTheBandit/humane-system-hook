@@ -66,7 +66,7 @@ object DataProtectorBypass {
             arrayOf(IntArray::class.java),
         ) { param ->
             param.result = fakeKeyId
-            Log.i(TAG, "  DataProtector.createKey() → plaintext key (bypassed)")
+            Log.w(TAG, "  DataProtector.createKey() → plaintext key (bypassed)")
         }
 
         // ─── Hook 2: protectDataWithExistingKey(ByteBuffer, KrKeyId, int, PersonalFlatMetadata) -> ProtectedData ───
@@ -98,7 +98,7 @@ object DataProtectorBypass {
                 param.result = protectedDataCtor.newInstance(keyId, 0, objectId, dupBuffer)
 
                 val size = dupBuffer.remaining()
-                Log.i(TAG, "  DataProtector.protectDataWithExistingKey() → plaintext passthrough ($size bytes)")
+                Log.w(TAG, "  DataProtector.protectDataWithExistingKey() → plaintext passthrough ($size bytes)")
             }
         }
 
@@ -131,10 +131,10 @@ object DataProtectorBypass {
                 val buffer = java.nio.ByteBuffer.wrap(rawBytes)
                 param.result = protectedDataCtor.newInstance(fakeKeyId, 0, 0, buffer)
 
-                Log.i(TAG, "  DataProtector.protectProtoWithNewKey() → plaintext serialized proto (${rawBytes.size} bytes)")
+                Log.w(TAG, "  DataProtector.protectProtoWithNewKey() → plaintext serialized proto (${rawBytes.size} bytes)")
             }
         }
 
-        Log.i(TAG, "  Encryption bypass hooks installed on $className")
+        Log.w(TAG, "  Encryption bypass hooks installed on $className")
     }
 }

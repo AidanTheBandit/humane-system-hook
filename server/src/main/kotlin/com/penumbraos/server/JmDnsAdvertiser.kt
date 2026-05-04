@@ -40,7 +40,7 @@ class JmDnsAdvertiser {
         executor.execute {
             synchronized(lock) {
                 if (jmdns != null) {
-                    Log.i(TAG, "JmDNS advertiser already running, ignoring start")
+                    Log.w(TAG, "JmDNS advertiser already running, ignoring start")
                     return@execute
                 }
 
@@ -60,7 +60,7 @@ class JmDnsAdvertiser {
                 instance.registerService(info)
                 jmdns = instance
                 serviceInfo = info
-                Log.i(
+                Log.w(
                     TAG,
                     "Registered mDNS service: name='$displayName' type=$SERVICE_TYPE " +
                         "host=$HOSTNAME.local addr=${bindAddress.hostAddress} port=$port",
@@ -88,7 +88,7 @@ class JmDnsAdvertiser {
                 }
                 jmdns = null
                 serviceInfo = null
-                Log.i(TAG, "JmDNS advertiser stopped")
+                Log.w(TAG, "JmDNS advertiser stopped")
             }
         }
     }

@@ -43,7 +43,7 @@ object MsTelemetryBypass {
             val dummyInstance = allocateInstance.invoke(unsafe, clazz)
 
             singletonField.set(null, dummyInstance)
-            Log.i(TAG, "  TelemetryManager.singleton pre-populated with dummy instance")
+            Log.w(TAG, "  TelemetryManager.singleton pre-populated with dummy instance")
         } catch (t: Throwable) {
             Log.w(TAG, "  Failed to pre-populate TelemetryManager singleton: ${t.message}")
             Log.w(TAG, "  Falling back to hooking getSingleton()")
@@ -73,12 +73,12 @@ object MsTelemetryBypass {
                     }
                 }
             })
-            Log.i(TAG, "  Hooked TelemetryManager.getSingleton() (belt-and-suspenders)")
+            Log.w(TAG, "  Hooked TelemetryManager.getSingleton() (belt-and-suspenders)")
         } catch (t: Throwable) {
             Log.w(TAG, "  Failed to hook getSingleton (non-fatal, field pre-population should suffice): ${t.message}")
         }
 
-        Log.i(TAG, "  MS Speech SDK telemetry bypass installed")
+        Log.w(TAG, "  MS Speech SDK telemetry bypass installed")
     }
 
     /**
@@ -108,7 +108,7 @@ object MsTelemetryBypass {
                     }
                 }
             })
-            Log.i(TAG, "  Hooked TelemetryManager.getSingleton() (fallback mode)")
+            Log.w(TAG, "  Hooked TelemetryManager.getSingleton() (fallback mode)")
 
             // Also neuter HttpClient.createClientInstance() to prevent native init
             neuterHttpClient(clazz.classLoader!!)
@@ -132,7 +132,7 @@ object MsTelemetryBypass {
                 param.result = null
                 // Don't log on every call — this fires during construction
             }
-            Log.i(TAG, "  Hooked HttpClient.createClientInstance() -> no-op")
+            Log.w(TAG, "  Hooked HttpClient.createClientInstance() -> no-op")
         } catch (t: Throwable) {
             Log.w(TAG, "  Failed to hook HttpClient.createClientInstance(): ${t.message}")
         }

@@ -15,13 +15,13 @@ object PhotographyHooks {
     private const val TAG = "PenumbraHook"
 
     fun install(cl: ClassLoader) {
-        Log.i(TAG, "Installing photography hooks...")
+        Log.w(TAG, "Installing photography hooks...")
 
         TcmSilencer.install(cl)
         ChannelFactoryBypass.install(cl)
         DataProtectorBypass.install(cl)
         WirelessChargingBypass.install(cl)
 
-        Log.i(TAG, "Photography hooks installed")
+        Log.w(TAG, "Photography hooks installed")
     }
 }

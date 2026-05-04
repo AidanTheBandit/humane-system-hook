@@ -58,7 +58,7 @@ object PackageInjector {
         try {
             init()
             isInitialized = true
-            Log.i(TAG, "PackageInjector initialized")
+            Log.w(TAG, "PackageInjector initialized")
         } catch (t: Throwable) {
             Log.e(TAG, "PackageInjector initialization FAILED", t)
         }
@@ -104,14 +104,14 @@ object PackageInjector {
         val getService = serviceManager.getDeclaredMethod("getService", String::class.java)
         val pms = getService.invoke(null, "package")
             ?: throw RuntimeException("ServiceManager.getService('package') returned null")
-        Log.i(TAG, "Got PMS: ${pms.javaClass.name}")
+        Log.w(TAG, "Got PMS: ${pms.javaClass.name}")
 
         // PMS.mPackages — WatchedArrayMap<String, AndroidPackage> (line 873)
         val mPackagesField = pms.javaClass.getDeclaredField("mPackages")
         mPackagesField.isAccessible = true
         pmsPackages = mPackagesField.get(pms)
             ?: throw RuntimeException("PMS.mPackages is null")
-        Log.i(TAG, "Got PMS.mPackages: ${pmsPackages!!.javaClass.name}")
+        Log.w(TAG, "Got PMS.mPackages: ${pmsPackages!!.javaClass.name}")
 
         // PMS.mSettings — Settings (line 923)
         val mSettingsField = pms.javaClass.getDeclaredField("mSettings")
@@ -124,13 +124,13 @@ object PackageInjector {
         settingsMPackagesField.isAccessible = true
         settingsPackages = settingsMPackagesField.get(settings)
             ?: throw RuntimeException("Settings.mPackages is null")
-        Log.i(TAG, "Got Settings.mPackages: ${settingsPackages!!.javaClass.name}")
+        Log.w(TAG, "Got Settings.mPackages: ${settingsPackages!!.javaClass.name}")
 
         // Cache the get() method on WatchedArrayMap (extends ArrayMap which has get(Object))
         mapGetMethod = pmsPackages!!.javaClass.getMethod("get", Any::class.java)
         mapGetMethod!!.isAccessible = true
 
-        Log.i(TAG, "PackageInjector init complete")
+        Log.w(TAG, "PackageInjector init complete")
     }
 
     // -----------------------------------------------------------------------
@@ -144,8 +144,8 @@ object PackageInjector {
             return false
         }
 
-        Log.i(TAG, "=== INJECTING into $packageName ===")
-        Log.i(TAG, "  Hook APK: $hookApkPath")
+        Log.w(TAG, "=== INJECTING into $packageName ===")
+        Log.w(TAG, "  Hook APK: $hookApkPath")
 
         // 1. Mutate AndroidPackage (ParsingPackageImpl) — set appComponentFactory
         val androidPackage = mapGetMethod!!.invoke(pmsPackages, packageName)
@@ -153,19 +153,19 @@ object PackageInjector {
             Log.e(TAG, "  Package '$packageName' not found in PMS.mPackages")
             return false
         }
-        Log.i(TAG, "  AndroidPackage class: ${androidPackage.javaClass.name}")
+        Log.w(TAG, "  AndroidPackage class: ${androidPackage.javaClass.name}")
 
         // Save original appComponentFactory for logging
         val getFactory = androidPackage.javaClass.getMethod("getAppComponentFactory")
         val originalFactory = getFactory.invoke(androidPackage) as? String ?: ""
-        Log.i(TAG, "  Original appComponentFactory: '$originalFactory'")
+        Log.w(TAG, "  Original appComponentFactory: '$originalFactory'")
 
         // Set our factory
         val setFactory = androidPackage.javaClass.getMethod(
             "setAppComponentFactory", String::class.java
         )
         setFactory.invoke(androidPackage, HOOK_FACTORY_CLASS)
-        Log.i(TAG, "  Set appComponentFactory -> $HOOK_FACTORY_CLASS")
+        Log.w(TAG, "  Set appComponentFactory -> $HOOK_FACTORY_CLASS")
 
         // 2. Mutate PackageSetting — add hook APK to usesLibraryFiles
         val packageSetting = mapGetMethod!!.invoke(settingsPackages, packageName)
@@ -199,14 +199,14 @@ object PackageInjector {
                 "setUsesLibraryFiles", List::class.java
             )
             setLibFiles.invoke(pkgState, newLibFiles)
-            Log.i(TAG, "  Added to usesLibraryFiles: $hookApkPath")
-            Log.i(TAG, "  Full usesLibraryFiles: $newLibFiles")
+            Log.w(TAG, "  Added to usesLibraryFiles: $hookApkPath")
+            Log.w(TAG, "  Full usesLibraryFiles: $newLibFiles")
         } else {
-            Log.i(TAG, "  Hook APK already in usesLibraryFiles")
+            Log.w(TAG, "  Hook APK already in usesLibraryFiles")
         }
 
-        Log.i(TAG, "=== Injection configured for $packageName ===")
-        Log.i(TAG, "  Force-stop and relaunch the target to activate.")
+        Log.w(TAG, "=== Injection configured for $packageName ===")
+        Log.w(TAG, "  Force-stop and relaunch the target to activate.")
         return true
     }
 
@@ -228,7 +228,7 @@ object PackageInjector {
             val getPath = hookPackage.javaClass.getMethod("getBaseApkPath")
             val path = getPath.invoke(hookPackage) as? String
             if (path != null) {
-                Log.i(TAG, "Hook APK path from PMS: $path")
+                Log.w(TAG, "Hook APK path from PMS: $path")
             } else {
                 Log.e(TAG, "getBaseApkPath() returned null for $HOOK_APK_PACKAGE")
             }

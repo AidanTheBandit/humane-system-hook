@@ -269,6 +269,6 @@ object AdbWifiBridge {
     }
 
     private fun log(msg: String) {
-        Log.i(TAG, msg)
+        Log.w(TAG, msg)
     }
 }
