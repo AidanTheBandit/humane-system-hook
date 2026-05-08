@@ -8,6 +8,7 @@ mod api;
 mod config;
 mod db;
 mod dedup;
+mod esim;
 mod llm;
 mod nearby;
 mod services;
@@ -424,6 +425,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store: media_store.clone(),
     };
 
+    let esim_bridge = esim::EsimBridge::start();
+
     // Build the REST API router for the web portal
     let api_state = api::ApiState {
         store: media_store,
@@ -436,6 +439,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         shared_weather_key,
         log_dir: log_dir_for_api,
         log_file_prefix: log_file_prefix_for_api,
+        esim_bridge,
     };
 
     // CORS layer for the web portal (public HTTPS → local HTTP via LNA).

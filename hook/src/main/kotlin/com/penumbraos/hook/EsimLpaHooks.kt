@@ -3,6 +3,8 @@ package com.penumbraos.hook
 import android.content.Intent
 import android.util.Log
 import java.lang.reflect.Method
+import java.util.ArrayList
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -12,6 +14,8 @@ object EsimLpaHooks {
 
     private const val TAG = "PenumbraHook"
     private const val MAX_ITERATIONS = 200
+    private const val PROTECTED_T_MOBILE_NAME = "t-mobile"
+    private const val PROTECTED_GSMA_TEST_PREFIX = "gsma test profile"
 
     // Hex encoding of ASCII "Humane"
     private const val HUMANE_HEX = "48756D616E65"
@@ -23,6 +27,9 @@ object EsimLpaHooks {
      * every onStartCommand (every new intent).
      */
     private val bypassActive = AtomicBoolean(false)
+    private val installedProfileControllerListeners = Collections.newSetFromMap(java.util.WeakHashMap<Any, Boolean>())
+    private val installedDownloadControllerListeners = Collections.newSetFromMap(java.util.WeakHashMap<Any, Boolean>())
+    private val installedCommunicationManagerListeners = Collections.newSetFromMap(java.util.WeakHashMap<Any, Boolean>())
 
     // -- Cached reflection handles (resolved once in install()) --
 
@@ -68,7 +75,13 @@ object EsimLpaHooks {
         Log.w(TAG, "Installing eSIM LPA hooks...")
 
         try {
+            TcmSilencer.install(cl)
             resolveClasses(cl)
+            hookActionCapture(cl)
+            hookSyspropCapture(cl)
+            hookProfileMutationCapture(cl)
+            hookDownloadCapture(cl)
+            hookDeleteProtection(cl)
             hookCarrierLock(cl)
             hookBF25Parser(cl)
             Log.w(TAG, "eSIM LPA hooks installed")
@@ -141,6 +154,293 @@ object EsimLpaHooks {
         Log.w(TAG, "  eSIM LPA reflection resolved successfully")
     }
 
+    private fun hookActionCapture(cl: ClassLoader) {
+        val factoryServiceClass = cl.loadClass("humane.connectivity.esimlpa.factoryService")
+
+        HookUtils.hookMethodBefore(
+            factoryServiceClass,
+            "onStartCommand",
+            arrayOf(Intent::class.java, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!)
+        ) { param ->
+            val intent = param.args[0] as? Intent
+            EsimOperationContext.clear()
+            EsimOperationContext.currentAction = intent?.action
+            EsimOperationContext.currentRequestId = intent?.getStringExtra("penumbra_request_id")
+            EsimOperationContext.currentIccid = intent?.getStringExtra("iccid")
+            EsimOperationContext.currentActivationCode = intent?.getStringExtra("activationCode")
+            EsimOperationContext.currentNickname = intent?.getStringExtra("Nickname")
+            EsimOperationContext.currentSource = intent?.getStringExtra("penumbra_source")
+            EsimEventEmitter.emitActionStarted()
+        }
+
+        Log.w(TAG, "  eSIM action capture installed")
+    }
+
+    private fun hookSyspropCapture(cl: ClassLoader) {
+        val factoryServiceClass = cl.loadClass("humane.connectivity.esimlpa.factoryService")
+
+        HookUtils.hookMethodAfter(
+            factoryServiceClass,
+            "setSysProp",
+            arrayOf(String::class.java, String::class.java)
+        ) { param ->
+            val key = param.args[0] as? String ?: return@hookMethodAfter
+            val value = param.args[1] as? String
+            EsimEventEmitter.emitSyspropUpdate(key, value)
+        }
+
+        Log.w(TAG, "  eSIM sysprop capture installed")
+    }
+
+    private fun hookProfileMutationCapture(cl: ClassLoader) {
+        val profileInfoControlerClass = cl.loadClass("es.com.valid.lib_lpa.controler.ProfileInfoControler")
+        val listenerInterfaceClass = cl.loadClass("es.com.valid.lib_lpa.controler.ProfileInfoControler\$ProfileInfoControlerListener")
+
+        HookUtils.hookMethodAfter(
+            profileInfoControlerClass,
+            "setProfileInfoControlerListener",
+            arrayOf(listenerInterfaceClass)
+        ) { param ->
+            val listener = param.args[0] ?: return@hookMethodAfter
+            installProfileInfoListenerHooks(listener)
+        }
+
+        Log.w(TAG, "  eSIM profile mutation capture installed")
+    }
+
+    private fun currentMutationOperation(): String {
+        return when (EsimOperationContext.currentAction) {
+            "humane.connectivity.esimlpa.enableProfile" -> "enable"
+            "humane.connectivity.esimlpa.disableProfile",
+            "humane.connectivity.esimlpa.disableActiveProfile" -> "disable"
+            "humane.connectivity.esimlpa.deleteProfile" -> "delete"
+            "humane.connectivity.esimlpa.setNickname" -> "set_nickname"
+            else -> "unknown"
+        }
+    }
+
+    private fun classifyMutationResult(message: String?): String {
+        val normalized = message?.lowercase().orEmpty()
+        return when {
+            normalized.isEmpty() -> "success"
+            "error" in normalized || "fail" in normalized || "not exist" in normalized -> "error"
+            else -> "success"
+        }
+    }
+
+    private fun hookDownloadCapture(cl: ClassLoader) {
+        val downloadControlerClass = cl.loadClass("es.com.valid.lib_lpa.controler.DownloadControler")
+        val downloadListenerInterfaceClass = cl.loadClass("es.com.valid.lib_lpa.controler.DownloadControler\$DownloadControlerListener")
+        val communicationManagerClass = cl.loadClass("es.com.valid.lib_lpa.cardCommunication.CommunicationManager")
+        val communicationManagerListenerClass = cl.loadClass("es.com.valid.lib_lpa.cardCommunication.CommunicationManager\$CommunicationManagerListener")
+
+        HookUtils.hookMethodAfter(
+            downloadControlerClass,
+            "setDownloadControlerListener",
+            arrayOf(downloadListenerInterfaceClass)
+        ) { param ->
+            val listener = param.args[0] ?: return@hookMethodAfter
+            installDownloadListenerHooks(listener)
+        }
+
+        HookUtils.hookMethodAfter(
+            communicationManagerClass,
+            "setCommunicationManagerListener",
+            arrayOf(communicationManagerListenerClass)
+        ) { param ->
+            val listener = param.args[0] ?: return@hookMethodAfter
+            installCommunicationManagerListenerHooks(listener)
+        }
+
+        Log.w(TAG, "  eSIM download capture installed")
+    }
+
+    private fun classifyDownloadResult(message: String?): String {
+        val normalized = message?.lowercase().orEmpty()
+        return when {
+            "disallowed" in normalized -> "disallowed_profile"
+            else -> "error"
+        }
+    }
+
+    private fun hookDeleteProtection(cl: ClassLoader) {
+        val factoryServiceClass = cl.loadClass("humane.connectivity.esimlpa.factoryService")
+        val communicationManagerClass = cl.loadClass("es.com.valid.lib_lpa.cardCommunication.CommunicationManager")
+        val profileInfoClass = cl.loadClass("es.com.valid.lib_lpa.dataClasses.ProfileInfo")
+        val hexStringClass = cl.loadClass("es.com.valid.lib_lpa.dataClasses.HexString")
+        val utilClass = cl.loadClass("es.com.valid.lib_lpa.common.Util")
+
+        val getApplicationContextMethod = factoryServiceClass.getMethod("getApplicationContext")
+        val getInstanceMethod = communicationManagerClass.getMethod("getInstance", android.content.Context::class.java)
+        val openConnectionMethod = communicationManagerClass.getMethod("openConnection")
+        val closeConnectionMethod = communicationManagerClass.getMethod("closeConnection")
+        val getProfileListAsArrayMethod = communicationManagerClass.getMethod("getProfileListAsArray")
+        val getIccidMethod = profileInfoClass.getMethod("getIccid")
+        val getProfileNameMethod = profileInfoClass.getMethod("getProfileName")
+        val getValueRotatedMethod = cl.loadClass("es.com.valid.lib_lpa.dataClasses.Iccid").getMethod("getValueRotated")
+        val getHexValueMethod = hexStringClass.getMethod("getValue")
+        val hexToAsciiMethod = utilClass.getMethod("HexToAscII", String::class.java)
+
+        HookUtils.hookMethodBefore(
+            factoryServiceClass,
+            "deleteProfileUtil",
+            arrayOf(String::class.java)
+        ) { param ->
+            val targetIccid = param.args[0] as? String ?: return@hookMethodBefore
+            val context = getApplicationContextMethod.invoke(param.thisObject) as? android.content.Context ?: return@hookMethodBefore
+            val communicationManager = getInstanceMethod.invoke(null, context) ?: return@hookMethodBefore
+
+            var opened = false
+            try {
+                openConnectionMethod.invoke(communicationManager)
+                opened = true
+                @Suppress("UNCHECKED_CAST")
+                val profiles = getProfileListAsArrayMethod.invoke(communicationManager) as? ArrayList<Any> ?: return@hookMethodBefore
+                val profile = profiles.firstOrNull { candidate ->
+                    val iccidObject = getIccidMethod.invoke(candidate) ?: return@firstOrNull false
+                    val rotated = getValueRotatedMethod.invoke(iccidObject) as? String ?: return@firstOrNull false
+                    rotated.equals(targetIccid, ignoreCase = true)
+                } ?: return@hookMethodBefore
+
+                val profileName = decodeProfileName(getProfileNameMethod.invoke(profile), getHexValueMethod, hexToAsciiMethod)
+                if (!isProtectedProfileName(profileName)) {
+                    return@hookMethodBefore
+                }
+
+                val protectedName = profileName?.ifBlank { null } ?: "unknown"
+                val message = "Deletion blocked for protected profile: $protectedName"
+                Log.w(TAG, "  Protected delete blocked iccid=$targetIccid name=$protectedName")
+                EsimEventEmitter.emitProfileMutationResult("delete", "protected", message)
+                param.result = null
+            } catch (t: Throwable) {
+                Log.w(TAG, "  Protected delete inspection failed; allowing delete", t)
+            } finally {
+                if (opened) {
+                    try {
+                        closeConnectionMethod.invoke(communicationManager)
+                    } catch (closeError: Throwable) {
+                        Log.w(TAG, "  Failed to close connection after delete protection check", closeError)
+                    }
+                }
+            }
+        }
+
+        Log.w(TAG, "  eSIM delete protection installed")
+    }
+
+    private fun installProfileInfoListenerHooks(listener: Any) {
+        synchronized(installedProfileControllerListeners) {
+            if (!installedProfileControllerListeners.add(listener)) {
+                return
+            }
+        }
+
+        val listenerClass = listener.javaClass
+        HookUtils.hookMethodAfter(listenerClass, "onEnable", arrayOf(String::class.java)) { param ->
+            val message = param.args[0] as? String
+            EsimEventEmitter.emitProfileMutationResult("enable", classifyMutationResult(message), message)
+        }
+        HookUtils.hookMethodAfter(listenerClass, "onDisable", arrayOf(String::class.java)) { param ->
+            val message = param.args[0] as? String
+            EsimEventEmitter.emitProfileMutationResult("disable", classifyMutationResult(message), message)
+        }
+        HookUtils.hookMethodAfter(listenerClass, "onDelete", arrayOf(String::class.java)) { param ->
+            val message = param.args[0] as? String
+            EsimEventEmitter.emitProfileMutationResult("delete", classifyMutationResult(message), message)
+        }
+        HookUtils.hookMethodAfter(listenerClass, "onsetNickName", arrayOf(String::class.java)) { param ->
+            val message = param.args[0] as? String
+            EsimEventEmitter.emitProfileMutationResult("set_nickname", classifyMutationResult(message), message)
+        }
+        HookUtils.hookMethodAfter(listenerClass, "onError", arrayOf(String::class.java)) { param ->
+            val message = param.args[0] as? String
+            EsimEventEmitter.emitProfileMutationResult(currentMutationOperation(), "error", message)
+        }
+    }
+
+    private fun installDownloadListenerHooks(listener: Any) {
+        synchronized(installedDownloadControllerListeners) {
+            if (!installedDownloadControllerListeners.add(listener)) {
+                return
+            }
+        }
+
+        val listenerClass = listener.javaClass
+        val listenerClassLoader = listenerClass.classLoader ?: return
+        val storeMetadataRequestClass = listenerClassLoader.loadClass("es.com.valid.lib_lpa.dataClasses.StoreMetadataRequest")
+        val pprResultClass = listenerClassLoader.loadClass("es.com.valid.lib_lpa.dataClasses.PprResult")
+        val getIccidMethod = storeMetadataRequestClass.getMethod("getIccid")
+
+        HookUtils.hookMethodAfter(listenerClass, "onProgress", arrayOf(Int::class.javaPrimitiveType!!)) { param ->
+            val progress = param.args[0] as? Int
+            EsimEventEmitter.emitDownloadProgress("download_progress", progress)
+        }
+        HookUtils.hookMethodAfter(
+            listenerClass,
+            "onMutualAuthenticationCompleted",
+            arrayOf(storeMetadataRequestClass, pprResultClass)
+        ) { param ->
+            val storeMetadataRequest = param.args[0] ?: return@hookMethodAfter
+            val iccid = try {
+                val iccidObject = getIccidMethod.invoke(storeMetadataRequest)
+                iccidObject?.javaClass?.getMethod("getValueRotated")?.invoke(iccidObject) as? String
+            } catch (t: Throwable) {
+                Log.w(TAG, "  Failed to extract download ICCID", t)
+                null
+            }
+            EsimOperationContext.currentDownloadIccid = iccid
+            EsimEventEmitter.emitDownloadProgress("mutual_auth_completed", message = iccid)
+        }
+        HookUtils.hookMethodAfter(listenerClass, "onFinished", arrayOf(String::class.java)) { param ->
+            val message = param.args[0] as? String
+            EsimEventEmitter.emitDownloadProgress("finished", message = message)
+            EsimEventEmitter.emitDownloadResult("success", message)
+        }
+        HookUtils.hookMethodAfter(listenerClass, "onError", arrayOf(String::class.java)) { param ->
+            val message = param.args[0] as? String
+            EsimEventEmitter.emitDownloadResult(classifyDownloadResult(message), message)
+        }
+    }
+
+    private fun installCommunicationManagerListenerHooks(listener: Any) {
+        synchronized(installedCommunicationManagerListeners) {
+            if (!installedCommunicationManagerListeners.add(listener)) {
+                return
+            }
+        }
+
+        val listenerClass = listener.javaClass
+        HookUtils.hookMethodAfter(listenerClass, "onProgress", arrayOf(Int::class.javaPrimitiveType!!)) { param ->
+            val progress = param.args[0] as? Int
+            EsimEventEmitter.emitDownloadProgress("communication_progress", progress)
+        }
+        HookUtils.hookMethodAfter(listenerClass, "onError", arrayOf(String::class.java)) { param ->
+            val message = param.args[0] as? String
+            EsimEventEmitter.emitDownloadResult("error", message)
+        }
+    }
+
+    private fun decodeProfileName(
+        profileNameObject: Any?,
+        getHexValueMethod: Method,
+        hexToAsciiMethod: Method,
+    ): String? {
+        if (profileNameObject == null) return null
+        return try {
+            val hexValue = getHexValueMethod.invoke(profileNameObject) as? String ?: return null
+            if (hexValue.isBlank()) return null
+            (hexToAsciiMethod.invoke(null, hexValue) as? String)?.trim()
+        } catch (t: Throwable) {
+            Log.w(TAG, "  Failed to decode profile name", t)
+            null
+        }
+    }
+
+    private fun isProtectedProfileName(profileName: String?): Boolean {
+        val normalized = profileName?.trim()?.lowercase().orEmpty()
+        if (normalized.isEmpty()) return false
+        return normalized.startsWith(PROTECTED_T_MOBILE_NAME) || normalized.startsWith(PROTECTED_GSMA_TEST_PREFIX)
+    }
 
     /**
      * Hook ProfileInfo.getProfileName() to return a HexString with value

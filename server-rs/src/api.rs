@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
@@ -18,8 +19,11 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use crate::config::Config;
+use crate::esim::{EsimBridge, EsimRequestError, EsimRequestRecord, EsimSnapshot};
 use crate::llm::LlmAgent;
 use crate::storage::{MediaStore, MemoryRecord};
+
+const ESIM_GETTER_TIMEOUT: Duration = Duration::from_secs(20);
 
 // ─── Shared state ───────────────────────────────────────────────────
 
@@ -43,6 +47,8 @@ pub struct ApiState {
     pub log_dir: Option<PathBuf>,
     /// File-name prefix for rolling log files.
     pub log_file_prefix: String,
+    /// Persistent eSIM bridge to the Android server app.
+    pub esim_bridge: EsimBridge,
 }
 
 // ─── Event types for the streaming endpoint ─────────────────────────
@@ -79,6 +85,18 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/events", get(event_stream))
         .route("/api/logs/server", get(get_server_logs))
         .route("/api/logs/logcat", get(get_logcat_logs))
+        .route("/api/esim/state", get(get_esim_state))
+        .route("/api/esim/events", get(esim_event_stream))
+        .route("/api/esim/requests/{request_id}", get(get_esim_request))
+        .route("/api/esim/get-profiles", put(esim_get_profiles))
+        .route("/api/esim/get-active-profile", put(esim_get_active_profile))
+        .route("/api/esim/get-active-iccid", put(esim_get_active_iccid))
+        .route("/api/esim/get-eid", put(esim_get_eid))
+        .route("/api/esim/enable-profile", put(esim_enable_profile))
+        .route("/api/esim/disable-profile", put(esim_disable_profile))
+        .route("/api/esim/set-nickname", put(esim_set_nickname))
+        .route("/api/esim/delete-profile", put(esim_delete_profile))
+        .route("/api/esim/download-verify-enable", put(esim_download_verify_enable))
         .with_state(state)
 }
 
@@ -270,6 +288,206 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
             has_api_key: config.weather.resolve_api_key().is_some(),
         },
     })
+}
+
+#[derive(Deserialize)]
+struct EsimIccidRequest {
+    iccid: String,
+}
+
+#[derive(Deserialize)]
+struct EsimNicknameRequest {
+    iccid: String,
+    nickname: String,
+}
+
+#[derive(Deserialize)]
+struct EsimActivationCodeRequest {
+    activation_code: String,
+}
+
+#[derive(Serialize)]
+struct EsimRequestAcceptedResponse {
+    request_id: String,
+}
+
+async fn get_esim_state(State(state): State<ApiState>) -> Json<EsimSnapshot> {
+    Json(state.esim_bridge.snapshot().await)
+}
+
+async fn get_esim_request(
+    Path(request_id): Path<String>,
+    State(state): State<ApiState>,
+) -> Result<Json<EsimRequestRecord>, StatusCode> {
+    state
+        .esim_bridge
+        .get_request(&request_id)
+        .await
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn esim_get_profiles(State(state): State<ApiState>) -> Response {
+    submit_esim_request_and_wait(
+        &state,
+        "humane.connectivity.esimlpa.getProfiles",
+        serde_json::json!({}),
+        &["esim.profiles_result"],
+    )
+    .await
+}
+
+async fn esim_get_active_profile(State(state): State<ApiState>) -> Response {
+    submit_esim_request_and_wait(
+        &state,
+        "humane.connectivity.esimlpa.getActiveProfile",
+        serde_json::json!({}),
+        &["esim.active_profile_result"],
+    )
+    .await
+}
+
+async fn esim_get_active_iccid(State(state): State<ApiState>) -> Response {
+    submit_esim_request_and_wait(
+        &state,
+        "humane.connectivity.esimlpa.getActiveprofileICCID",
+        serde_json::json!({}),
+        &["esim.active_iccid_result"],
+    )
+    .await
+}
+
+async fn esim_get_eid(State(state): State<ApiState>) -> Response {
+    submit_esim_request_and_wait(
+        &state,
+        "humane.connectivity.esimlpa.getEID",
+        serde_json::json!({}),
+        &["esim.eid_result"],
+    )
+    .await
+}
+
+async fn esim_enable_profile(
+    State(state): State<ApiState>,
+    Json(body): Json<EsimIccidRequest>,
+) -> Result<Json<EsimRequestAcceptedResponse>, StatusCode> {
+    submit_esim_request(
+        &state,
+        "humane.connectivity.esimlpa.enableProfile",
+        serde_json::json!({ "iccid": body.iccid }),
+    ).await
+}
+
+async fn esim_disable_profile(
+    State(state): State<ApiState>,
+    Json(body): Json<EsimIccidRequest>,
+) -> Result<Json<EsimRequestAcceptedResponse>, StatusCode> {
+    submit_esim_request(
+        &state,
+        "humane.connectivity.esimlpa.disableProfile",
+        serde_json::json!({ "iccid": body.iccid }),
+    ).await
+}
+
+async fn esim_set_nickname(
+    State(state): State<ApiState>,
+    Json(body): Json<EsimNicknameRequest>,
+) -> Result<Json<EsimRequestAcceptedResponse>, StatusCode> {
+    submit_esim_request(
+        &state,
+        "humane.connectivity.esimlpa.setNickname",
+        serde_json::json!({ "iccid": body.iccid, "nickname": body.nickname }),
+    ).await
+}
+
+async fn esim_delete_profile(
+    State(state): State<ApiState>,
+    Json(body): Json<EsimIccidRequest>,
+) -> Result<Json<EsimRequestAcceptedResponse>, StatusCode> {
+    submit_esim_request(
+        &state,
+        "humane.connectivity.esimlpa.deleteProfile",
+        serde_json::json!({ "iccid": body.iccid }),
+    ).await
+}
+
+async fn esim_download_verify_enable(
+    State(state): State<ApiState>,
+    Json(body): Json<EsimActivationCodeRequest>,
+) -> Result<Json<EsimRequestAcceptedResponse>, StatusCode> {
+    submit_esim_request(
+        &state,
+        "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile",
+        serde_json::json!({ "activationCode": body.activation_code }),
+    ).await
+}
+
+async fn submit_esim_request(
+    state: &ApiState,
+    action: &str,
+    payload: serde_json::Value,
+) -> Result<Json<EsimRequestAcceptedResponse>, StatusCode> {
+    match state.esim_bridge.submit_request(action.to_string(), payload).await {
+        Ok(request_id) => Ok(Json(EsimRequestAcceptedResponse { request_id })),
+        Err(error) => {
+            warn!(%error, action, "failed to submit eSIM request");
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
+}
+
+async fn submit_esim_request_and_wait(
+    state: &ApiState,
+    action: &str,
+    payload: serde_json::Value,
+    terminal_types: &[&str],
+) -> Response {
+    match state
+        .esim_bridge
+        .submit_request_and_wait(
+            action.to_string(),
+            payload,
+            terminal_types,
+            ESIM_GETTER_TIMEOUT,
+        )
+        .await
+    {
+        Ok(event) => Json(event).into_response(),
+        Err(error) => {
+            warn!(error = ?error, action, "failed to complete synchronous eSIM request");
+            esim_request_error_response(error)
+        }
+    }
+}
+
+fn esim_request_error_response(error: EsimRequestError) -> Response {
+    match error {
+        EsimRequestError::BridgeError { event, .. } => {
+            (StatusCode::BAD_GATEWAY, Json(event)).into_response()
+        }
+        EsimRequestError::Timeout { request_id } => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({
+                "type": "esim.request_timeout",
+                "request_id": request_id,
+                "payload": {
+                    "message": "timed out waiting for terminal event"
+                }
+            })),
+        )
+            .into_response(),
+        EsimRequestError::Internal { request_id, message } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "type": "esim.bridge_error",
+                "request_id": request_id,
+                "payload": {
+                    "message": message
+                }
+            })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -611,42 +829,85 @@ fn persist_config_inner(
 
 async fn event_stream(State(state): State<ApiState>) -> Response {
     let mut rx = state.events_tx.subscribe();
+    build_ndjson_stream_response(
+        async_stream::stream! {
+            // Immediately send a heartbeat so the client knows the connection is live.
+            yield Ok::<_, std::convert::Infallible>(
+                format!("{}\n", serde_json::to_string(&Event::Heartbeat).unwrap())
+            );
 
-    let stream = async_stream::stream! {
-        // Immediately send a heartbeat so the client knows the connection is live.
-        yield Ok::<_, std::convert::Infallible>(
-            format!("{}\n", serde_json::to_string(&Event::Heartbeat).unwrap())
-        );
+            let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+            heartbeat.tick().await; // consume the immediate first tick
 
-        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
-        heartbeat.tick().await; // consume the immediate first tick
-
-        loop {
-            tokio::select! {
-                result = rx.recv() => {
-                    match result {
-                        Ok(event) => {
-                            let line = format!("{}\n", serde_json::to_string(&event).unwrap());
-                            yield Ok(line);
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(missed = n, "event stream client lagged");
-                            // Continue — the client will miss some events but stay connected.
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            break;
+            loop {
+                tokio::select! {
+                    result = rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                let line = format!("{}\n", serde_json::to_string(&event).unwrap());
+                                yield Ok(line);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!(missed = n, "event stream client lagged");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                break;
+                            }
                         }
                     }
-                }
-                _ = heartbeat.tick() => {
-                    yield Ok(
-                        format!("{}\n", serde_json::to_string(&Event::Heartbeat).unwrap())
-                    );
+                    _ = heartbeat.tick() => {
+                        yield Ok(
+                            format!("{}\n", serde_json::to_string(&Event::Heartbeat).unwrap())
+                        );
+                    }
                 }
             }
-        }
-    };
+        },
+    )
+}
 
+async fn esim_event_stream(State(state): State<ApiState>) -> Response {
+    let mut rx = state.esim_bridge.subscribe();
+    build_ndjson_stream_response(
+        async_stream::stream! {
+            yield Ok::<_, std::convert::Infallible>(
+                format!("{}\n", serde_json::json!({"type":"esim.heartbeat"}))
+            );
+
+            let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+            heartbeat.tick().await;
+
+            loop {
+                tokio::select! {
+                    result = rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                let line = format!("{}\n", serde_json::to_string(&event).unwrap());
+                                yield Ok(line);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!(missed = n, "eSIM event stream client lagged");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                break;
+                            }
+                        }
+                    }
+                    _ = heartbeat.tick() => {
+                        yield Ok(
+                            format!("{}\n", serde_json::json!({"type":"esim.heartbeat"}))
+                        );
+                    }
+                }
+            }
+        },
+    )
+}
+
+fn build_ndjson_stream_response<S>(stream: S) -> Response
+where
+    S: futures::stream::Stream<Item = Result<String, std::convert::Infallible>> + Send + 'static,
+{
     let body = axum::body::Body::from_stream(stream);
 
     Response::builder()

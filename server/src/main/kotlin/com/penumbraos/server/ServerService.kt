@@ -41,6 +41,8 @@ class ServerService : Service() {
         startForegroundCompat()
 
         acquireMulticastLock()
+        EsimSocketServer.start()
+        EsimBridgeServer.start(applicationContext)
 
         advertiser = JmDnsAdvertiser()
 
@@ -82,6 +84,8 @@ class ServerService : Service() {
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to stop runtime cleanly", t)
         }
+        EsimBridgeServer.stop()
+        EsimSocketServer.stop()
         releaseMulticastLock()
         super.onDestroy()
     }
