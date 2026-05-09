@@ -207,14 +207,14 @@ impl EsimBridge {
             .get(request_id)
             .and_then(|record| record.final_event.clone())
         {
-            if matches_terminal_type(&existing, terminal_types) {
-                return Ok(existing);
-            }
-            if bridge_error_for_request(&existing, request_id) {
+            if bridge_error_for_request(&existing, request_id) || explicit_error_event_for_request(&existing, request_id) {
                 return Err(EsimRequestError::BridgeError {
                     request_id: request_id.to_string(),
                     event: existing,
                 });
+            }
+            if matches_terminal_type(&existing, terminal_types) {
+                return Ok(existing);
             }
         }
 
@@ -233,7 +233,7 @@ impl EsimBridge {
                     continue;
                 }
 
-                if bridge_error_for_request(&event, &request_id) {
+                if bridge_error_for_request(&event, &request_id) || explicit_error_event_for_request(&event, &request_id) {
                     return Err(EsimRequestError::BridgeError {
                         request_id: request_id.clone(),
                         event,
@@ -449,6 +449,61 @@ async fn handle_connection(
     }
 }
 
+fn payload_result_is_error(result: &str) -> bool {
+    matches!(result, "error" | "protected" | "disallowed_profile")
+}
+
+fn explicit_error_event_for_request(event: &Value, request_id: &str) -> bool {
+    if event.get("request_id").and_then(Value::as_str) != Some(request_id) {
+        return false;
+    }
+
+    event
+        .get("payload")
+        .and_then(|payload| payload.get("result"))
+        .and_then(Value::as_str)
+        .map(payload_result_is_error)
+        .unwrap_or(false)
+}
+
+fn download_verify_enable_event_is_final(envelope: &BridgeEnvelope) -> bool {
+    match envelope.message_type.as_str() {
+        "esim.download_result" => envelope
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("result"))
+            .and_then(Value::as_str)
+            .map(payload_result_is_error)
+            .unwrap_or(false),
+        "esim.profile_mutation_result" => {
+            let payload = match envelope.payload.as_ref() {
+                Some(payload) => payload,
+                None => return false,
+            };
+            let operation = payload.get("operation").and_then(Value::as_str).unwrap_or("");
+            let result = payload.get("result").and_then(Value::as_str).unwrap_or("");
+            operation == "enable" || (operation == "unknown" && result == "error")
+        }
+        _ => false,
+    }
+}
+
+fn is_final_event_for_action(action: &str, envelope: &BridgeEnvelope) -> bool {
+    if action == "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile" {
+        return download_verify_enable_event_is_final(envelope);
+    }
+
+    matches!(
+        envelope.message_type.as_str(),
+        "esim.profiles_result"
+            | "esim.active_profile_result"
+            | "esim.active_iccid_result"
+            | "esim.device_identifiers_result"
+            | "esim.profile_mutation_result"
+            | "esim.download_result"
+    )
+}
+
 async fn handle_incoming_message(
     state: &Arc<BridgeState>,
     envelope: BridgeEnvelope,
@@ -480,6 +535,7 @@ async fn handle_incoming_message(
                             .as_ref()
                             .and_then(|payload| payload.get("message"))
                             .and_then(Value::as_str)
+                            .or_else(|| value.get("message").and_then(Value::as_str))
                             .unwrap_or("bridge error")
                             .to_string();
                         let _ = tx.send(Err(message));
@@ -488,15 +544,7 @@ async fn handle_incoming_message(
                 _ => {
                     push_request_event(record, value.clone());
                     record.updated_at_ms = now_ms;
-                    if matches!(
-                        envelope.message_type.as_str(),
-                        "esim.profiles_result"
-                            | "esim.active_profile_result"
-                            | "esim.active_iccid_result"
-                            | "esim.device_identifiers_result"
-                            | "esim.profile_mutation_result"
-                            | "esim.download_result"
-                    ) {
+                    if record.final_event.is_none() && is_final_event_for_action(&record.action, &envelope) {
                         record.final_event = Some(value.clone());
                         let result = envelope
                             .payload
@@ -504,7 +552,7 @@ async fn handle_incoming_message(
                             .and_then(|payload| payload.get("result"))
                             .and_then(Value::as_str)
                             .unwrap_or("success");
-                        record.status = if matches!(result, "error" | "protected") {
+                        record.status = if payload_result_is_error(result) {
                             "error".into()
                         } else {
                             "completed".into()

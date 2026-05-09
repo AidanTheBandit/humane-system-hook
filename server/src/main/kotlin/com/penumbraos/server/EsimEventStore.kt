@@ -36,6 +36,9 @@ object EsimEventStore {
     private var activeDownloadRequestId: String? = null
 
     @Volatile
+    private var activeDownloadAction: String? = null
+
+    @Volatile
     private var activeDownloadTerminalResult: JSONObject? = null
 
     @Synchronized
@@ -50,6 +53,68 @@ object EsimEventStore {
             "esim.download_progress" -> handleDownloadProgress(event)
             "esim.download_result" -> handleDownloadResult(event)
         }
+    }
+
+    private fun isDownloadAction(action: String?): Boolean {
+        return action == "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile" ||
+            action == "humane.connectivity.esimlpa.downloadAndEnableProfile"
+    }
+
+    private fun currentDownloadActionFor(event: JSONObject): String? {
+        return event.optString("action").takeIf { it.isNotEmpty() } ?: currentAction
+    }
+
+    private fun matchesActiveDownload(event: JSONObject, action: String?): Boolean {
+        if (!isDownloadAction(action)) {
+            return false
+        }
+        val eventRequestId = event.optString("request_id").takeIf { it.isNotEmpty() }
+        if (eventRequestId != null && eventRequestId != activeDownloadRequestId) {
+            return false
+        }
+        return activeDownloadAction == null || activeDownloadAction == action
+    }
+
+    private fun downloadResultIsTerminalFailure(event: JSONObject, action: String?): Boolean {
+        if (!matchesActiveDownload(event, action)) {
+            return false
+        }
+        val result = event.optJSONObject("payload")?.optString("result")?.takeIf { it.isNotEmpty() } ?: return false
+        return result != "success"
+    }
+
+    private fun mutationResultIsTerminalForDownload(event: JSONObject, action: String?): Boolean {
+        if (action != "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile" || !matchesActiveDownload(event, action)) {
+            return false
+        }
+        val payload = event.optJSONObject("payload") ?: return false
+        val operation = payload.optString("operation")
+        val result = payload.optString("result")
+        if (result.isEmpty()) {
+            return false
+        }
+        return operation == "enable" || (operation == "unknown" && result == "error")
+    }
+
+    private fun isTerminalDownloadEvent(event: JSONObject): Boolean {
+        val action = currentDownloadActionFor(event)
+        return when (event.optString("type")) {
+            "esim.download_result" -> downloadResultIsTerminalFailure(event, action)
+            "esim.profile_mutation_result" -> mutationResultIsTerminalForDownload(event, action)
+            else -> false
+        }
+    }
+
+    private fun markDownloadTerminal(event: JSONObject) {
+        activeDownloadTerminalResult = JSONObject(event.toString())
+    }
+
+    private fun hasDownloadTerminalFor(event: JSONObject): Boolean {
+        val action = currentDownloadActionFor(event)
+        if (!matchesActiveDownload(event, action)) {
+            return false
+        }
+        return activeDownloadTerminalResult != null
     }
 
     fun addTypedEventListener(listener: (JSONObject) -> Unit) {
@@ -80,6 +145,7 @@ object EsimEventStore {
             "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile",
             "humane.connectivity.esimlpa.downloadAndEnableProfile" -> {
                 activeDownloadRequestId = currentRequestId
+                activeDownloadAction = action
                 activeDownloadTerminalResult = null
             }
         }
@@ -114,12 +180,19 @@ object EsimEventStore {
     }
 
     private fun handleProfileMutationResult(event: JSONObject) {
+        if (hasDownloadTerminalFor(event)) {
+            Log.w(TAG, "Ignoring profile_mutation_result after terminal result payload=${event.optJSONObject("payload")}")
+            return
+        }
+        if (isTerminalDownloadEvent(event)) {
+            markDownloadTerminal(event)
+        }
         Log.w(TAG, "Received profile_mutation_result payload=${event.optJSONObject("payload")}")
         notifyTypedEvent(event)
     }
 
     private fun handleDownloadProgress(event: JSONObject) {
-        if (isDownloadTerminal(event)) {
+        if (hasDownloadTerminalFor(event)) {
             Log.w(TAG, "Ignoring download_progress after terminal result payload=${event.optJSONObject("payload")}")
             return
         }
@@ -128,29 +201,15 @@ object EsimEventStore {
     }
 
     private fun handleDownloadResult(event: JSONObject) {
-        if (isDownloadTerminal(event)) {
+        if (hasDownloadTerminalFor(event)) {
             Log.w(TAG, "Ignoring duplicate download_result payload=${event.optJSONObject("payload")}")
             return
         }
-        activeDownloadTerminalResult = JSONObject(event.toString())
+        if (isTerminalDownloadEvent(event)) {
+            markDownloadTerminal(event)
+        }
         Log.w(TAG, "Received download_result payload=${event.optJSONObject("payload")}")
         notifyTypedEvent(event)
-    }
-
-    private fun isDownloadTerminal(event: JSONObject): Boolean {
-        val action = event.optString("action").takeIf { it.isNotEmpty() } ?: currentAction
-        if (action != "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile" &&
-            action != "humane.connectivity.esimlpa.downloadAndEnableProfile"
-        ) {
-            return false
-        }
-
-        if (activeDownloadTerminalResult == null) {
-            return false
-        }
-
-        val eventRequestId = event.optString("request_id").takeIf { it.isNotEmpty() }
-        return eventRequestId == null || eventRequestId == activeDownloadRequestId
     }
 
     private fun maybeSynthesizeProfilesResult() {

@@ -215,9 +215,14 @@ object EsimLpaHooks {
         Log.w(TAG, "  eSIM profile mutation capture installed")
     }
 
+    private fun isDownloadVerifyEnableAction(): Boolean {
+        return EsimOperationContext.currentAction == "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile"
+    }
+
     private fun currentMutationOperation(): String {
         return when (EsimOperationContext.currentAction) {
-            "humane.connectivity.esimlpa.enableProfile" -> "enable"
+            "humane.connectivity.esimlpa.enableProfile",
+            "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile" -> "enable"
             "humane.connectivity.esimlpa.disableProfile",
             "humane.connectivity.esimlpa.disableActiveProfile" -> "disable"
             "humane.connectivity.esimlpa.deleteProfile" -> "delete"
@@ -401,7 +406,9 @@ object EsimLpaHooks {
         HookUtils.hookMethodAfter(listenerClass, "onFinished", arrayOf(String::class.java)) { param ->
             val message = param.args[0] as? String
             EsimEventEmitter.emitDownloadProgress("finished", message = message)
-            EsimEventEmitter.emitDownloadResult("success", message)
+            if (!isDownloadVerifyEnableAction()) {
+                EsimEventEmitter.emitDownloadResult("success", message)
+            }
         }
         HookUtils.hookMethodAfter(listenerClass, "onError", arrayOf(String::class.java)) { param ->
             val message = param.args[0] as? String
