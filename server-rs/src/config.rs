@@ -209,10 +209,18 @@ impl Config {
         #[cfg(target_os = "android")]
         {
             if !std::path::Path::new(&config.storage.media_dir).is_absolute() {
-                return Err(format!("Android requires absolute storage.media_dir, got {}", config.storage.media_dir).into());
+                return Err(format!(
+                    "Android requires absolute storage.media_dir, got {}",
+                    config.storage.media_dir
+                )
+                .into());
             }
             if !std::path::Path::new(&config.storage.db_path).is_absolute() {
-                return Err(format!("Android requires absolute storage.db_path, got {}", config.storage.db_path).into());
+                return Err(format!(
+                    "Android requires absolute storage.db_path, got {}",
+                    config.storage.db_path
+                )
+                .into());
             }
         }
 

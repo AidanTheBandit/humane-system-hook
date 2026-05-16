@@ -19,7 +19,10 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use crate::config::Config;
-use crate::esim::{CellularStatusError, DeviceToggleError, EsimBridge, EsimRequestError, EsimRequestRecord, EsimSnapshot};
+use crate::esim::{
+    CellularStatusError, DeviceToggleError, EsimBridge, EsimRequestError, EsimRequestRecord,
+    EsimSnapshot,
+};
 use crate::llm::LlmAgent;
 use crate::storage::{MediaStore, MemoryRecord};
 
@@ -73,19 +76,16 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/memories", get(list_memories))
         .route("/api/memories/{uuid}", get(get_memory))
         .route("/api/memories/{uuid}", delete(delete_memory))
-        .route(
-            "/api/memories/{uuid}/thumbnail/{index}",
-            get(get_thumbnail),
-        )
-        .route(
-            "/api/memories/{uuid}/files/{filename}",
-            get(get_file),
-        )
+        .route("/api/memories/{uuid}/thumbnail/{index}", get(get_thumbnail))
+        .route("/api/memories/{uuid}/files/{filename}", get(get_file))
         .route("/api/device", get(get_device))
         .route("/api/settings", get(get_settings))
         .route("/api/settings", put(update_settings))
         .route("/api/events", get(event_stream))
-        .route("/api/cellular/service-status", get(get_cellular_service_status))
+        .route(
+            "/api/cellular/service-status",
+            get(get_cellular_service_status),
+        )
         .route("/api/cellular/set-enabled", put(set_cellular_enabled))
         .route("/api/wifi/set-enabled", put(set_wifi_enabled))
         .route("/api/logs/server", get(get_server_logs))
@@ -101,7 +101,10 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/esim/disable-profile", put(esim_disable_profile))
         .route("/api/esim/set-nickname", put(esim_set_nickname))
         .route("/api/esim/delete-profile", put(esim_delete_profile))
-        .route("/api/esim/download-verify-enable", put(esim_download_verify_enable))
+        .route(
+            "/api/esim/download-verify-enable",
+            put(esim_download_verify_enable),
+        )
         .with_state(state)
 }
 
@@ -147,9 +150,9 @@ async fn delete_memory(
     let mut store = state.store.lock().await;
     match store.delete_memory(&uuid).await {
         Ok(true) => {
-            let _ = state.events_tx.send(Event::MemoryDeleted {
-                uuid: uuid.clone(),
-            });
+            let _ = state
+                .events_tx
+                .send(Event::MemoryDeleted { uuid: uuid.clone() });
             info!(uuid, "memory deleted via API");
             Ok(StatusCode::NO_CONTENT)
         }
@@ -326,7 +329,11 @@ async fn get_esim_state(State(state): State<ApiState>) -> Json<EsimSnapshot> {
 }
 
 async fn get_cellular_service_status(State(state): State<ApiState>) -> Response {
-    match state.esim_bridge.get_cellular_status(CELLULAR_STATUS_TIMEOUT).await {
+    match state
+        .esim_bridge
+        .get_cellular_status(CELLULAR_STATUS_TIMEOUT)
+        .await
+    {
         Ok(event) => Json(event).into_response(),
         Err(error) => {
             warn!(error = ?error, "failed to fetch cellular service status");
@@ -339,7 +346,11 @@ async fn set_cellular_enabled(
     State(state): State<ApiState>,
     Json(body): Json<SetEnabledRequest>,
 ) -> Response {
-    match state.esim_bridge.set_cellular_enabled(body.enabled, NETWORK_TOGGLE_TIMEOUT).await {
+    match state
+        .esim_bridge
+        .set_cellular_enabled(body.enabled, NETWORK_TOGGLE_TIMEOUT)
+        .await
+    {
         Ok(event) => Json(event).into_response(),
         Err(error) => {
             warn!(error = ?error, enabled = body.enabled, "failed to toggle cellular data");
@@ -352,7 +363,11 @@ async fn set_wifi_enabled(
     State(state): State<ApiState>,
     Json(body): Json<SetEnabledRequest>,
 ) -> Response {
-    match state.esim_bridge.set_wifi_enabled(body.enabled, NETWORK_TOGGLE_TIMEOUT).await {
+    match state
+        .esim_bridge
+        .set_wifi_enabled(body.enabled, NETWORK_TOGGLE_TIMEOUT)
+        .await
+    {
         Ok(event) => Json(event).into_response(),
         Err(error) => {
             warn!(error = ?error, enabled = body.enabled, "failed to toggle Wi-Fi");
@@ -421,7 +436,8 @@ async fn esim_enable_profile(
         &state,
         "humane.connectivity.esimlpa.enableProfile",
         serde_json::json!({ "iccid": body.iccid }),
-    ).await
+    )
+    .await
 }
 
 async fn esim_disable_profile(
@@ -432,7 +448,8 @@ async fn esim_disable_profile(
         &state,
         "humane.connectivity.esimlpa.disableProfile",
         serde_json::json!({ "iccid": body.iccid }),
-    ).await
+    )
+    .await
 }
 
 async fn esim_set_nickname(
@@ -443,7 +460,8 @@ async fn esim_set_nickname(
         &state,
         "humane.connectivity.esimlpa.setNickname",
         serde_json::json!({ "iccid": body.iccid, "nickname": body.nickname }),
-    ).await
+    )
+    .await
 }
 
 async fn esim_delete_profile(
@@ -454,7 +472,8 @@ async fn esim_delete_profile(
         &state,
         "humane.connectivity.esimlpa.deleteProfile",
         serde_json::json!({ "iccid": body.iccid }),
-    ).await
+    )
+    .await
 }
 
 async fn esim_download_verify_enable(
@@ -465,7 +484,8 @@ async fn esim_download_verify_enable(
         &state,
         "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile",
         serde_json::json!({ "activationCode": body.activation_code }),
-    ).await
+    )
+    .await
 }
 
 async fn submit_esim_request(
@@ -473,7 +493,11 @@ async fn submit_esim_request(
     action: &str,
     payload: serde_json::Value,
 ) -> Result<Json<EsimRequestAcceptedResponse>, StatusCode> {
-    match state.esim_bridge.submit_request(action.to_string(), payload).await {
+    match state
+        .esim_bridge
+        .submit_request(action.to_string(), payload)
+        .await
+    {
         Ok(request_id) => Ok(Json(EsimRequestAcceptedResponse { request_id })),
         Err(error) => {
             warn!(%error, action, "failed to submit eSIM request");
@@ -522,7 +546,10 @@ fn esim_request_error_response(error: EsimRequestError) -> Response {
             })),
         )
             .into_response(),
-        EsimRequestError::Internal { request_id, message } => (
+        EsimRequestError::Internal {
+            request_id,
+            message,
+        } => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
                 "type": "esim.bridge_error",
@@ -538,7 +565,9 @@ fn esim_request_error_response(error: EsimRequestError) -> Response {
 
 fn cellular_status_error_response(error: CellularStatusError) -> Response {
     match error {
-        CellularStatusError::BridgeError(event) => (StatusCode::BAD_GATEWAY, Json(event)).into_response(),
+        CellularStatusError::BridgeError(event) => {
+            (StatusCode::BAD_GATEWAY, Json(event)).into_response()
+        }
         CellularStatusError::Timeout { request_id } => (
             StatusCode::GATEWAY_TIMEOUT,
             Json(serde_json::json!({
@@ -565,7 +594,9 @@ fn cellular_status_error_response(error: CellularStatusError) -> Response {
 
 fn device_toggle_error_response(error: DeviceToggleError) -> Response {
     match error {
-        DeviceToggleError::BridgeError(event) => (StatusCode::BAD_GATEWAY, Json(event)).into_response(),
+        DeviceToggleError::BridgeError(event) => {
+            (StatusCode::BAD_GATEWAY, Json(event)).into_response()
+        }
         DeviceToggleError::Timeout { request_id } => (
             StatusCode::GATEWAY_TIMEOUT,
             Json(serde_json::json!({
@@ -730,7 +761,11 @@ async fn update_settings(
     let mut weather_key_changed = false;
     if let Some(ref weather) = body.weather {
         if let Some(ref key) = weather.pirate_weather_api_key {
-            let new_val = if key.is_empty() { None } else { Some(key.clone()) };
+            let new_val = if key.is_empty() {
+                None
+            } else {
+                Some(key.clone())
+            };
             if new_val != config.weather.pirate_weather_api_key {
                 config.weather.pirate_weather_api_key = new_val;
                 weather_key_changed = true;
@@ -754,7 +789,10 @@ async fn update_settings(
                 // Swap the agent
                 let mut agent_guard = state.shared_agent.write().await;
                 *agent_guard = Arc::new(new_agent);
-                info!("hot-reloaded LLM agent (provider={}, model={})", config.llm.provider, config.llm.model);
+                info!(
+                    "hot-reloaded LLM agent (provider={}, model={})",
+                    config.llm.provider, config.llm.model
+                );
             }
             Err(e) => {
                 // Rollback config changes: re-read from the file since we already mutated in-place.
@@ -819,10 +857,7 @@ async fn update_settings(
 
 /// Persist the config to disk using `toml_edit` for format-preserving writes.
 /// Creates a `.bak` backup before overwriting.
-fn persist_config(
-    config_path: &std::path::Path,
-    config: &Config,
-) -> Result<(), String> {
+fn persist_config(config_path: &std::path::Path, config: &Config) -> Result<(), String> {
     persist_config_inner(config_path, config).map_err(|e| e.to_string())
 }
 
@@ -929,79 +964,75 @@ fn persist_config_inner(
 
 async fn event_stream(State(state): State<ApiState>) -> Response {
     let mut rx = state.events_tx.subscribe();
-    build_ndjson_stream_response(
-        async_stream::stream! {
-            // Immediately send a heartbeat so the client knows the connection is live.
-            yield Ok::<_, std::convert::Infallible>(
-                format!("{}\n", serde_json::to_string(&Event::Heartbeat).unwrap())
-            );
+    build_ndjson_stream_response(async_stream::stream! {
+        // Immediately send a heartbeat so the client knows the connection is live.
+        yield Ok::<_, std::convert::Infallible>(
+            format!("{}\n", serde_json::to_string(&Event::Heartbeat).unwrap())
+        );
 
-            let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
-            heartbeat.tick().await; // consume the immediate first tick
+        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+        heartbeat.tick().await; // consume the immediate first tick
 
-            loop {
-                tokio::select! {
-                    result = rx.recv() => {
-                        match result {
-                            Ok(event) => {
-                                let line = format!("{}\n", serde_json::to_string(&event).unwrap());
-                                yield Ok(line);
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!(missed = n, "event stream client lagged");
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                break;
-                            }
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            let line = format!("{}\n", serde_json::to_string(&event).unwrap());
+                            yield Ok(line);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(missed = n, "event stream client lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
                         }
                     }
-                    _ = heartbeat.tick() => {
-                        yield Ok(
-                            format!("{}\n", serde_json::to_string(&Event::Heartbeat).unwrap())
-                        );
-                    }
+                }
+                _ = heartbeat.tick() => {
+                    yield Ok(
+                        format!("{}\n", serde_json::to_string(&Event::Heartbeat).unwrap())
+                    );
                 }
             }
-        },
-    )
+        }
+    })
 }
 
 async fn esim_event_stream(State(state): State<ApiState>) -> Response {
     let mut rx = state.esim_bridge.subscribe();
-    build_ndjson_stream_response(
-        async_stream::stream! {
-            yield Ok::<_, std::convert::Infallible>(
-                format!("{}\n", serde_json::json!({"type":"esim.heartbeat"}))
-            );
+    build_ndjson_stream_response(async_stream::stream! {
+        yield Ok::<_, std::convert::Infallible>(
+            format!("{}\n", serde_json::json!({"type":"esim.heartbeat"}))
+        );
 
-            let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
-            heartbeat.tick().await;
+        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+        heartbeat.tick().await;
 
-            loop {
-                tokio::select! {
-                    result = rx.recv() => {
-                        match result {
-                            Ok(event) => {
-                                let line = format!("{}\n", serde_json::to_string(&event).unwrap());
-                                yield Ok(line);
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!(missed = n, "eSIM event stream client lagged");
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                break;
-                            }
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            let line = format!("{}\n", serde_json::to_string(&event).unwrap());
+                            yield Ok(line);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(missed = n, "eSIM event stream client lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
                         }
                     }
-                    _ = heartbeat.tick() => {
-                        yield Ok(
-                            format!("{}\n", serde_json::json!({"type":"esim.heartbeat"}))
-                        );
-                    }
+                }
+                _ = heartbeat.tick() => {
+                    yield Ok(
+                        format!("{}\n", serde_json::json!({"type":"esim.heartbeat"}))
+                    );
                 }
             }
-        },
-    )
+        }
+    })
 }
 
 fn build_ndjson_stream_response<S>(stream: S) -> Response
@@ -1108,11 +1139,7 @@ async fn get_server_logs(
         _ => buf,
     };
 
-    (
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        body,
-    )
-        .into_response()
+    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
 }
 
 /// Return the last `n` lines from `bytes`. Operates on raw bytes to avoid
@@ -1141,9 +1168,7 @@ fn tail_lines(bytes: &[u8], n: usize) -> Vec<u8> {
 /// Only available on Android. Returns 503 on other platforms. Uses
 /// `logcat -d` (dump-and-exit). Use `?lines=N` to tail the output.
 #[cfg(target_os = "android")]
-async fn get_logcat_logs(
-    axum::extract::Query(query): axum::extract::Query<LogQuery>,
-) -> Response {
+async fn get_logcat_logs(axum::extract::Query(query): axum::extract::Query<LogQuery>) -> Response {
     use tokio::process::Command;
 
     let output = match Command::new("logcat").args(["-d"]).output().await {
@@ -1173,17 +1198,11 @@ async fn get_logcat_logs(
         _ => output.stdout,
     };
 
-    (
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        body,
-    )
-        .into_response()
+    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
 }
 
 #[cfg(not(target_os = "android"))]
-async fn get_logcat_logs(
-    axum::extract::Query(_query): axum::extract::Query<LogQuery>,
-) -> Response {
+async fn get_logcat_logs(axum::extract::Query(_query): axum::extract::Query<LogQuery>) -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         "logcat is only available on Android",

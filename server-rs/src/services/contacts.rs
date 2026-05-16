@@ -4,8 +4,8 @@ use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::info;
 
-use crate::proto::contacts::*;
 use crate::proto::contacts::contacts_rpc_service_server::ContactsRpcService;
+use crate::proto::contacts::*;
 
 pub struct ContactsRpcServiceImpl;
 

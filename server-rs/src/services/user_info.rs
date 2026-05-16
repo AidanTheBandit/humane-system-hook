@@ -1,8 +1,8 @@
 use tonic::{Request, Response, Status};
 use tracing::info;
 
-use crate::proto::account::*;
 use crate::proto::account::user_information_service_server::UserInformationService;
+use crate::proto::account::*;
 
 pub struct UserInformationServiceImpl;
 

@@ -4,15 +4,14 @@ use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
 
-use crate::proto::pushrelay::*;
 use crate::proto::pushrelay::push_relay_service_server::PushRelayService;
+use crate::proto::pushrelay::*;
 
 pub struct PushRelayServiceImpl;
 
 #[tonic::async_trait]
 impl PushRelayService for PushRelayServiceImpl {
-    type SubscribeStream =
-        Pin<Box<dyn Stream<Item = Result<PushMessageResponse, Status>> + Send>>;
+    type SubscribeStream = Pin<Box<dyn Stream<Item = Result<PushMessageResponse, Status>> + Send>>;
 
     async fn subscribe(
         &self,

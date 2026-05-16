@@ -216,7 +216,9 @@ impl CaptureService for CaptureServiceImpl {
 
                 // Notify web portal clients
                 if let Some(record) = store.get_memory(&memory_uuid).await {
-                    let _ = self.events_tx.send(api::Event::MemoryCreated { memory: record });
+                    let _ = self
+                        .events_tx
+                        .send(api::Event::MemoryCreated { memory: record });
                 }
 
                 Ok(Response::new(CreateMemoryResponse {
@@ -277,7 +279,9 @@ impl CaptureService for CaptureServiceImpl {
 
                 // Notify web portal clients
                 if let Some(record) = store.get_memory(&memory_uuid).await {
-                    let _ = self.events_tx.send(api::Event::MemoryCreated { memory: record });
+                    let _ = self
+                        .events_tx
+                        .send(api::Event::MemoryCreated { memory: record });
                 }
 
                 Ok(Response::new(CreateMemoryResponse {
@@ -324,7 +328,9 @@ impl CaptureService for CaptureServiceImpl {
 
                 // Notify web portal clients
                 if let Some(record) = store.get_memory(&memory_uuid).await {
-                    let _ = self.events_tx.send(api::Event::MemoryCreated { memory: record });
+                    let _ = self
+                        .events_tx
+                        .send(api::Event::MemoryCreated { memory: record });
                 }
 
                 Ok(Response::new(CreateMemoryResponse {
@@ -369,7 +375,9 @@ impl CaptureService for CaptureServiceImpl {
 
                 // Notify web portal clients
                 if let Some(record) = store.get_memory(&memory_uuid).await {
-                    let _ = self.events_tx.send(api::Event::MemoryCreated { memory: record });
+                    let _ = self
+                        .events_tx
+                        .send(api::Event::MemoryCreated { memory: record });
                 }
 
                 Ok(Response::new(CreateMemoryResponse {
@@ -443,9 +451,9 @@ impl CaptureService for CaptureServiceImpl {
             match store.complete_memory(uuid).await {
                 Ok(true) => {
                     info!(uuid, "memory marked complete");
-                    let _ = self.events_tx.send(api::Event::MemoryCompleted {
-                        uuid: uuid.clone(),
-                    });
+                    let _ = self
+                        .events_tx
+                        .send(api::Event::MemoryCompleted { uuid: uuid.clone() });
                 }
                 Ok(false) => warn!(uuid, "memory not found for completion"),
                 Err(e) => warn!(uuid, error = %e, "failed to complete memory"),

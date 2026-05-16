@@ -1,8 +1,8 @@
 use tonic::{Request, Response, Status};
 use tracing::info;
 
-use crate::proto::account::*;
 use crate::proto::account::wifi_config_service_server::WifiConfigService;
+use crate::proto::account::*;
 
 pub struct WifiConfigServiceImpl;
 

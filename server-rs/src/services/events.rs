@@ -1,8 +1,8 @@
 use tonic::{Request, Response, Status};
 use tracing::info;
 
-use crate::proto::events::*;
 use crate::proto::events::events_ingest_service_server::EventsIngestService;
+use crate::proto::events::*;
 
 pub struct EventsIngestServiceImpl;
 

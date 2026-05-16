@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::broadcast::error::RecvError;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -35,8 +35,13 @@ pub struct EsimSnapshot {
 
 #[derive(Debug, Clone)]
 pub enum EsimRequestError {
-    BridgeError { request_id: String, event: Value },
-    Timeout { request_id: String },
+    BridgeError {
+        request_id: String,
+        event: Value,
+    },
+    Timeout {
+        request_id: String,
+    },
     Internal {
         request_id: Option<String>,
         message: String,
@@ -124,12 +129,12 @@ impl EsimBridge {
                 request_id: None,
                 message,
             })?;
-        self.wait_for_acceptance(&request_id).await.map_err(|message| {
-            EsimRequestError::Internal {
+        self.wait_for_acceptance(&request_id)
+            .await
+            .map_err(|message| EsimRequestError::Internal {
                 request_id: Some(request_id.clone()),
                 message,
-            }
-        })?;
+            })?;
         self.wait_for_terminal_event(&request_id, terminal_types, timeout)
             .await
     }
@@ -147,7 +152,11 @@ impl EsimBridge {
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
         };
-        self.state.requests.lock().await.insert(request_id.clone(), record);
+        self.state
+            .requests
+            .lock()
+            .await
+            .insert(request_id.clone(), record);
 
         let body = serde_json::json!({
             "type": "esim.request",
@@ -173,12 +182,17 @@ impl EsimBridge {
             .ok_or_else(|| "request record missing after enqueue".to_string())?
             .status = "waiting_accept".into();
 
-        self.state.acceptance_waiters.lock().await.insert(request_id.clone(), accepted_rx);
+        self.state
+            .acceptance_waiters
+            .lock()
+            .await
+            .insert(request_id.clone(), accepted_rx);
         Ok(request_id)
     }
 
     async fn wait_for_acceptance(&self, request_id: &str) -> Result<(), String> {
-        let accepted_rx = self.state
+        let accepted_rx = self
+            .state
             .acceptance_waiters
             .lock()
             .await
@@ -207,7 +221,9 @@ impl EsimBridge {
             .get(request_id)
             .and_then(|record| record.final_event.clone())
         {
-            if bridge_error_for_request(&existing, request_id) || explicit_error_event_for_request(&existing, request_id) {
+            if bridge_error_for_request(&existing, request_id)
+                || explicit_error_event_for_request(&existing, request_id)
+            {
                 return Err(EsimRequestError::BridgeError {
                     request_id: request_id.to_string(),
                     event: existing,
@@ -220,7 +236,10 @@ impl EsimBridge {
 
         let request_id = request_id.to_string();
         let timeout_request_id = request_id.clone();
-        let terminal_types = terminal_types.iter().map(|item| item.to_string()).collect::<Vec<_>>();
+        let terminal_types = terminal_types
+            .iter()
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>();
 
         let wait = async move {
             loop {
@@ -233,7 +252,9 @@ impl EsimBridge {
                     continue;
                 }
 
-                if bridge_error_for_request(&event, &request_id) || explicit_error_event_for_request(&event, &request_id) {
+                if bridge_error_for_request(&event, &request_id)
+                    || explicit_error_event_for_request(&event, &request_id)
+                {
                     return Err(EsimRequestError::BridgeError {
                         request_id: request_id.clone(),
                         event,
@@ -269,14 +290,20 @@ impl EsimBridge {
             .collect::<Vec<_>>();
         requests.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
 
-        EsimSnapshot { connected, requests }
+        EsimSnapshot {
+            connected,
+            requests,
+        }
     }
 
     pub async fn get_request(&self, request_id: &str) -> Option<EsimRequestRecord> {
         self.state.requests.lock().await.get(request_id).cloned()
     }
 
-    pub async fn get_cellular_status(&self, timeout: std::time::Duration) -> Result<Value, CellularStatusError> {
+    pub async fn get_cellular_status(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Value, CellularStatusError> {
         let request_id = format!("cellular_{}", Uuid::new_v4().simple());
         let body = serde_json::json!({
             "type": "cellular.status_request",
@@ -288,15 +315,21 @@ impl EsimBridge {
                 body,
                 accepted_tx: None,
             })
-            .map_err(|_| CellularStatusError::Internal("bridge command queue closed".to_string()))?;
+            .map_err(|_| {
+                CellularStatusError::Internal("bridge command queue closed".to_string())
+            })?;
 
         let mut rx = self.state.events_tx.subscribe();
         let wait_request_id = request_id.clone();
         let wait = async move {
             loop {
                 let event = rx.recv().await.map_err(|error| match error {
-                    RecvError::Lagged(missed) => CellularStatusError::Internal(format!("cellular status stream lagged by {missed}")),
-                    RecvError::Closed => CellularStatusError::Internal("cellular status stream closed".to_string()),
+                    RecvError::Lagged(missed) => CellularStatusError::Internal(format!(
+                        "cellular status stream lagged by {missed}"
+                    )),
+                    RecvError::Closed => {
+                        CellularStatusError::Internal("cellular status stream closed".to_string())
+                    }
                 })?;
                 let event_request_id = event.get("request_id").and_then(Value::as_str);
                 if event_request_id != Some(wait_request_id.as_str()) {
@@ -304,7 +337,9 @@ impl EsimBridge {
                 }
                 match event.get("type").and_then(Value::as_str) {
                     Some("cellular.status_result") => return Ok(event),
-                    Some("cellular.status_error") => return Err(CellularStatusError::BridgeError(event)),
+                    Some("cellular.status_error") => {
+                        return Err(CellularStatusError::BridgeError(event))
+                    }
                     _ => continue,
                 }
             }
@@ -315,24 +350,34 @@ impl EsimBridge {
             .map_err(|_| CellularStatusError::Timeout { request_id })?
     }
 
-    pub async fn set_wifi_enabled(&self, enabled: bool, timeout: std::time::Duration) -> Result<Value, DeviceToggleError> {
+    pub async fn set_wifi_enabled(
+        &self,
+        enabled: bool,
+        timeout: std::time::Duration,
+    ) -> Result<Value, DeviceToggleError> {
         self.send_simple_request_and_wait(
             "wifi.set_enabled_request",
             serde_json::json!({ "enabled": enabled }),
             "wifi.set_enabled_result",
             "wifi.set_enabled_error",
             timeout,
-        ).await
+        )
+        .await
     }
 
-    pub async fn set_cellular_enabled(&self, enabled: bool, timeout: std::time::Duration) -> Result<Value, DeviceToggleError> {
+    pub async fn set_cellular_enabled(
+        &self,
+        enabled: bool,
+        timeout: std::time::Duration,
+    ) -> Result<Value, DeviceToggleError> {
         self.send_simple_request_and_wait(
             "cellular.set_enabled_request",
             serde_json::json!({ "enabled": enabled }),
             "cellular.set_enabled_result",
             "cellular.set_enabled_error",
             timeout,
-        ).await
+        )
+        .await
     }
 
     async fn send_simple_request_and_wait(
@@ -364,8 +409,12 @@ impl EsimBridge {
         let wait = async move {
             loop {
                 let event = rx.recv().await.map_err(|error| match error {
-                    RecvError::Lagged(missed) => DeviceToggleError::Internal(format!("device toggle stream lagged by {missed}")),
-                    RecvError::Closed => DeviceToggleError::Internal("device toggle stream closed".to_string()),
+                    RecvError::Lagged(missed) => DeviceToggleError::Internal(format!(
+                        "device toggle stream lagged by {missed}"
+                    )),
+                    RecvError::Closed => {
+                        DeviceToggleError::Internal("device toggle stream closed".to_string())
+                    }
                 })?;
                 let event_request_id = event.get("request_id").and_then(Value::as_str);
                 if event_request_id != Some(wait_request_id.as_str()) {
@@ -373,7 +422,9 @@ impl EsimBridge {
                 }
                 match event.get("type").and_then(Value::as_str) {
                     Some(value) if value == success_type => return Ok(event),
-                    Some(value) if value == error_type => return Err(DeviceToggleError::BridgeError(event)),
+                    Some(value) if value == error_type => {
+                        return Err(DeviceToggleError::BridgeError(event))
+                    }
                     _ => continue,
                 }
             }
@@ -389,13 +440,17 @@ impl EsimBridge {
     }
 }
 
-async fn run_bridge(state: Arc<BridgeState>, mut command_rx: mpsc::UnboundedReceiver<OutboundMessage>) {
+async fn run_bridge(
+    state: Arc<BridgeState>,
+    mut command_rx: mpsc::UnboundedReceiver<OutboundMessage>,
+) {
     loop {
         match TcpStream::connect(BRIDGE_ADDR).await {
             Ok(stream) => {
                 info!(addr = BRIDGE_ADDR, "connected to eSIM bridge");
                 *state.connected.write().await = true;
-                if let Err(error) = handle_connection(state.clone(), stream, &mut command_rx).await {
+                if let Err(error) = handle_connection(state.clone(), stream, &mut command_rx).await
+                {
                     warn!(%error, "eSIM bridge connection ended");
                 }
                 *state.connected.write().await = false;
@@ -480,7 +535,10 @@ fn download_verify_enable_event_is_final(envelope: &BridgeEnvelope) -> bool {
                 Some(payload) => payload,
                 None => return false,
             };
-            let operation = payload.get("operation").and_then(Value::as_str).unwrap_or("");
+            let operation = payload
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let result = payload.get("result").and_then(Value::as_str).unwrap_or("");
             operation == "enable" || (operation == "unknown" && result == "error")
         }
@@ -544,7 +602,9 @@ async fn handle_incoming_message(
                 _ => {
                     push_request_event(record, value.clone());
                     record.updated_at_ms = now_ms;
-                    if record.final_event.is_none() && is_final_event_for_action(&record.action, &envelope) {
+                    if record.final_event.is_none()
+                        && is_final_event_for_action(&record.action, &envelope)
+                    {
                         record.final_event = Some(value.clone());
                         let result = envelope
                             .payload

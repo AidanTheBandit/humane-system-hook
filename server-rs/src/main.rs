@@ -280,9 +280,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .init();
     }
 
-    let http_client = reqwest::Client::builder()
-        .tls_backend_native()
-        .build()?;
+    let http_client = reqwest::Client::builder().tls_backend_native().build()?;
 
     // Build LLM agent (behind RwLock for hot-reload)
     let agent = Arc::new(LlmAgent::from_config(
@@ -324,7 +322,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider_label = config.llm.provider.to_uppercase();
     info!("============================================================");
     info!("Humane HTTP server listening on {}", http_bind_addr);
-    info!("Humane gRPC server listening on {} (plaintext)", grpc_bind_addr);
+    info!(
+        "Humane gRPC server listening on {} (plaintext)",
+        grpc_bind_addr
+    );
     info!("Upload URL base: http://{}/upload/", public_addr);
     info!(
         "LLM provider: {} (model: {})",
@@ -339,7 +340,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         info!("Weather: no API key. EncryptedWeather will return UNAVAILABLE");
     }
-    info!("Storage: media_dir={}, db={}", config.storage.media_dir, config.storage.db_path);
+    info!(
+        "Storage: media_dir={}, db={}",
+        config.storage.media_dir, config.storage.db_path
+    );
     info!("Services:");
     info!(
         "  - humane.aibus.AIBusService/Understand       ({})",
@@ -375,11 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shared_config = Arc::new(RwLock::new(config.clone()));
 
     // Capture logging settings for the API state before `config` is moved.
-    let log_dir_for_api: Option<PathBuf> = config
-        .logging
-        .log_dir
-        .as_ref()
-        .map(PathBuf::from);
+    let log_dir_for_api: Option<PathBuf> = config.logging.log_dir.as_ref().map(PathBuf::from);
     let log_file_prefix_for_api: String = config.logging.file_prefix.clone();
 
     // Build the gRPC service stack as a native axum::Router.
@@ -452,22 +452,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_headers([http::header::CONTENT_TYPE])
         .expose_headers([http::header::CONTENT_TYPE]);
 
-    let api_router = api::router(api_state).layer(cors).layer(
-        axum::middleware::from_fn(|request: axum::extract::Request, next: axum::middleware::Next| async {
-            let mut response = next.run(request).await;
-            // Inject the LNA header on every response (including preflights).
-            response.headers_mut().insert(
-                HeaderName::from_static("access-control-allow-local-network"),
-                HeaderValue::from_static("true"),
-            );
-            // Also advertise in preflight Allow-Headers so the browser accepts it.
-            response.headers_mut().insert(
-                HeaderName::from_static("access-control-allow-private-network"),
-                HeaderValue::from_static("true"),
-            );
-            response
-        }),
-    );
+    let api_router = api::router(api_state)
+        .layer(cors)
+        .layer(axum::middleware::from_fn(
+            |request: axum::extract::Request, next: axum::middleware::Next| async {
+                let mut response = next.run(request).await;
+                // Inject the LNA header on every response (including preflights).
+                response.headers_mut().insert(
+                    HeaderName::from_static("access-control-allow-local-network"),
+                    HeaderValue::from_static("true"),
+                );
+                // Also advertise in preflight Allow-Headers so the browser accepts it.
+                response.headers_mut().insert(
+                    HeaderName::from_static("access-control-allow-private-network"),
+                    HeaderValue::from_static("true"),
+                );
+                response
+            },
+        ));
 
     // Apply trace layer to the HTTP router.
     let trace_layer = TraceLayer::new_for_http()
