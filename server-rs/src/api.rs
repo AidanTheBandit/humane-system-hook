@@ -248,6 +248,7 @@ struct SettingsResponse {
     server: ServerSettingsResponse,
     storage: StorageSettingsResponse,
     weather: WeatherSettingsResponse,
+    contacts: ContactsSettingsResponse,
 }
 
 #[derive(Serialize)]
@@ -279,6 +280,11 @@ struct WeatherSettingsResponse {
     has_api_key: bool,
 }
 
+#[derive(Serialize)]
+struct ContactsSettingsResponse {
+    trust_all_contacts: bool,
+}
+
 async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
     let config = state.shared_config.read().await;
     Json(SettingsResponse {
@@ -302,6 +308,9 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
         },
         weather: WeatherSettingsResponse {
             has_api_key: config.weather.resolve_api_key().is_some(),
+        },
+        contacts: ContactsSettingsResponse {
+            trust_all_contacts: config.contacts.trust_all_contacts,
         },
     })
 }
@@ -634,6 +643,7 @@ struct UpdateSettingsRequest {
     llm: Option<UpdateLlmSettings>,
     server: Option<UpdateServerSettings>,
     weather: Option<UpdateWeatherSettings>,
+    contacts: Option<UpdateContactsSettings>,
     /// Storage is read-only; presence in the request is rejected.
     storage: Option<serde_json::Value>,
 }
@@ -662,6 +672,11 @@ struct UpdateServerSettings {
 #[derive(Deserialize)]
 struct UpdateWeatherSettings {
     pirate_weather_api_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateContactsSettings {
+    trust_all_contacts: Option<bool>,
 }
 
 async fn update_settings(
@@ -781,6 +796,13 @@ async fn update_settings(
         }
     }
 
+    // --- Contacts changes ---
+    if let Some(ref contacts) = body.contacts {
+        if let Some(new_val) = contacts.trust_all_contacts {
+            config.contacts.trust_all_contacts = new_val;
+        }
+    }
+
     // --- Validate: try building a new LLM agent before committing ---
     if llm_changed || system_prompt_changed {
         // Build the agent (sync) and convert the error to String immediately
@@ -856,6 +878,9 @@ async fn update_settings(
         },
         weather: WeatherSettingsResponse {
             has_api_key: config.weather.resolve_api_key().is_some(),
+        },
+        contacts: ContactsSettingsResponse {
+            trust_all_contacts: config.contacts.trust_all_contacts,
         },
     };
 
@@ -954,6 +979,12 @@ fn persist_config_inner(
                 }
             }
         }
+    }
+
+    // --- [contacts] ---
+    {
+        let table = ensure_table(&mut doc, "contacts");
+        table["trust_all_contacts"] = toml_edit::value(config.contacts.trust_all_contacts);
     }
 
     // Create .bak before writing

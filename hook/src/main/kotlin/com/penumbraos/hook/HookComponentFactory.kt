@@ -34,6 +34,7 @@ class HookComponentFactory : AppComponentFactory() {
         private val HOOK_MODULES: List<Pair<String, (ClassLoader) -> Unit>> = listOf(
             "humaneinternal.system.MainApplication" to IronmanHooks::install,
             "humaneinternal.system.contacts.ContactsManager" to ContactsHooks::install,
+            "humane.addressbook.AddressBookAccess" to TrustedContactsHooks::install,
             "humane.experience.onboarding.OnboardingExperience" to OnboardingHooks::install,
             "system.PhotographyExperienceApplication" to PhotographyHooks::install,
             "humaneinternal.system.krypto.KryptoService" to KryptoHooks::install,

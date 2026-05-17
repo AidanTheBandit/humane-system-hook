@@ -14,6 +14,8 @@ pub struct Config {
     #[serde(default)]
     pub weather: WeatherConfig,
     #[serde(default)]
+    pub contacts: ContactsConfig,
+    #[serde(default)]
     pub logging: LoggingConfig,
 }
 
@@ -77,6 +79,13 @@ pub struct StorageConfig {
 pub struct WeatherConfig {
     /// PirateWeather API key. If not set, weather requests return "unavailable".
     pub pirate_weather_api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct ContactsConfig {
+    /// Treat all contacts/numbers as trusted at runtime.
+    #[serde(default)]
+    pub trust_all_contacts: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -202,6 +211,7 @@ impl Config {
                 server: ServerConfig::default(),
                 storage: StorageConfig::default(),
                 weather: WeatherConfig::default(),
+                contacts: ContactsConfig::default(),
                 logging: LoggingConfig::default(),
             }
         };
