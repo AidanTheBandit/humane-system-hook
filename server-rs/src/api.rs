@@ -283,6 +283,7 @@ struct WeatherSettingsResponse {
 #[derive(Serialize)]
 struct ContactsSettingsResponse {
     trust_all_contacts: bool,
+    allow_all_inbound: bool,
 }
 
 async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
@@ -311,6 +312,7 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
         },
         contacts: ContactsSettingsResponse {
             trust_all_contacts: config.contacts.trust_all_contacts,
+            allow_all_inbound: config.contacts.allow_all_inbound,
         },
     })
 }
@@ -677,6 +679,7 @@ struct UpdateWeatherSettings {
 #[derive(Deserialize)]
 struct UpdateContactsSettings {
     trust_all_contacts: Option<bool>,
+    allow_all_inbound: Option<bool>,
 }
 
 async fn update_settings(
@@ -801,6 +804,9 @@ async fn update_settings(
         if let Some(new_val) = contacts.trust_all_contacts {
             config.contacts.trust_all_contacts = new_val;
         }
+        if let Some(new_val) = contacts.allow_all_inbound {
+            config.contacts.allow_all_inbound = new_val;
+        }
     }
 
     // --- Validate: try building a new LLM agent before committing ---
@@ -881,6 +887,7 @@ async fn update_settings(
         },
         contacts: ContactsSettingsResponse {
             trust_all_contacts: config.contacts.trust_all_contacts,
+            allow_all_inbound: config.contacts.allow_all_inbound,
         },
     };
 
@@ -985,6 +992,7 @@ fn persist_config_inner(
     {
         let table = ensure_table(&mut doc, "contacts");
         table["trust_all_contacts"] = toml_edit::value(config.contacts.trust_all_contacts);
+        table["allow_all_inbound"] = toml_edit::value(config.contacts.allow_all_inbound);
     }
 
     // Create .bak before writing

@@ -10,16 +10,21 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Runtime bypass for Humane's trusted-contact filtering.
+ * Runtime bypasses for Humane's inbound call/message contact filtering.
  */
-object TrustedContactsHooks {
-    private const val TAG = "PenumbraTrustedContacts"
+object InboundFilteringHooks {
+    private const val TAG = "PenumbraInbound"
     private const val SETTINGS_URL = "http://127.0.0.1:8080/api/settings"
     private const val CACHE_TTL_MS = 2_000L
     private const val HTTP_TIMEOUT_MS = 200
+    private const val MESSAGE_SOUND_KEY = "ns"
+    private const val TRUSTED_SMS_SOUND = "trusted_or_leased_sms"
 
     @Volatile
     private var cachedTrustAllContacts = false
+
+    @Volatile
+    private var cachedAllowAllInbound = false
 
     @Volatile
     private var cacheExpiresAtMs = 0L
@@ -28,10 +33,11 @@ object TrustedContactsHooks {
     private val refreshInFlight = AtomicBoolean(false)
 
     fun install(cl: ClassLoader) {
-        Log.w(TAG, "Installing trusted-contact hooks")
+        Log.w(TAG, "Installing inbound filtering hooks")
         hookContactsManager(cl)
         hookAddressBookAccess(cl)
         hookCallUtils(cl)
+        hookMessageNotifications(cl)
     }
 
     private fun hookContactsManager(cl: ClassLoader) {
@@ -41,7 +47,7 @@ object TrustedContactsHooks {
             method.isAccessible = true
             XposedBridge.hookMethod(method, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (trustAllContactsEnabled()) {
+                    if (contactBypassEnabled()) {
                         param.result = true
                     }
                 }
@@ -87,7 +93,7 @@ object TrustedContactsHooks {
             method.isAccessible = true
             XposedBridge.hookMethod(method, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (trustAllContactsEnabled()) {
+                    if (contactBypassEnabled()) {
                         param.result = true
                     }
                 }
@@ -98,12 +104,80 @@ object TrustedContactsHooks {
         }
     }
 
-    private fun trustAllContactsEnabled(): Boolean {
+    private fun hookMessageNotifications(cl: ClassLoader) {
+        if (!isMessagesExperience(cl)) {
+            return
+        }
+        hookNotificationAccess(cl)
+        hookAlertAccess(cl)
+    }
+
+    private fun isMessagesExperience(cl: ClassLoader): Boolean {
+        return try {
+            cl.loadClass("humane.experience.messages.BuildConfig")
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun hookNotificationAccess(cl: ClassLoader) {
+        try {
+            val clazz = cl.loadClass("humaneinternal.system.notifications.NotificationAccess")
+            val notificationClass = cl.loadClass("humaneinternal.system.notifications.Notification")
+            val method = clazz.getDeclaredMethod("notify", notificationClass, java.lang.Boolean::class.java)
+            method.isAccessible = true
+            XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    if (allowAllInboundEnabled()) {
+                        param.args[1] = java.lang.Boolean.TRUE
+                    }
+                }
+            })
+            Log.w(TAG, "  Hooked NotificationAccess.notify(Notification, Boolean)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "  NotificationAccess hook unavailable: ${t.message}")
+        }
+    }
+
+    private fun hookAlertAccess(cl: ClassLoader) {
+        try {
+            val clazz = cl.loadClass("humane.system.AlertAccess")
+            val notificationTypeClass = cl.loadClass("humane.system.AlertAccess\$NotificationType")
+            val mapClass = Map::class.java
+            val method = clazz.getDeclaredMethod("notify", notificationTypeClass, mapClass)
+            method.isAccessible = true
+            XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    if (!allowAllInboundEnabled()) return
+                    val type = param.args.getOrNull(0) as? Enum<*> ?: return
+                    if (type.name != "NOTIFICATION_TYPE_MESSAGING") return
+                    @Suppress("UNCHECKED_CAST")
+                    val metadata = param.args.getOrNull(1) as? MutableMap<String, String> ?: return
+                    metadata[MESSAGE_SOUND_KEY] = TRUSTED_SMS_SOUND
+                }
+            })
+            Log.w(TAG, "  Hooked AlertAccess.notify(NotificationType, Map)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "  AlertAccess hook unavailable: ${t.message}")
+        }
+    }
+
+    private fun contactBypassEnabled(): Boolean {
+        refreshIfNeeded()
+        return cachedTrustAllContacts || cachedAllowAllInbound
+    }
+
+    private fun allowAllInboundEnabled(): Boolean {
+        refreshIfNeeded()
+        return cachedAllowAllInbound
+    }
+
+    private fun refreshIfNeeded() {
         val now = System.currentTimeMillis()
         if (now >= cacheExpiresAtMs) {
             scheduleRefresh(now)
         }
-        return cachedTrustAllContacts
     }
 
     private fun scheduleRefresh(now: Long) {
@@ -113,14 +187,16 @@ object TrustedContactsHooks {
         cacheExpiresAtMs = now + CACHE_TTL_MS
         refreshExecutor.execute {
             try {
-                cachedTrustAllContacts = fetchTrustAllContacts() ?: false
+                val settings = fetchInboundSettings()
+                cachedTrustAllContacts = settings?.trustAllContacts ?: false
+                cachedAllowAllInbound = settings?.allowAllInbound ?: false
             } finally {
                 refreshInFlight.set(false)
             }
         }
     }
 
-    private fun fetchTrustAllContacts(): Boolean? {
+    private fun fetchInboundSettings(): InboundSettings? {
         val connection = try {
             (URL(SETTINGS_URL).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -140,17 +216,22 @@ object TrustedContactsHooks {
                 null
             } else {
                 val body = connection.inputStream.bufferedReader().use { it.readText() }
-                val contacts = JSONObject(body).optJSONObject("contacts")
-                contacts?.optBoolean(
-                    "trust_all_contacts",
-                    contacts.optBoolean("disable_trusted_contacts", false),
+                val contacts = JSONObject(body).optJSONObject("contacts") ?: return null
+                InboundSettings(
+                    trustAllContacts = contacts.optBoolean("trust_all_contacts", false),
+                    allowAllInbound = contacts.optBoolean("allow_all_inbound", false),
                 )
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "  Failed to read trusted-contact setting: ${t.message}")
+            Log.w(TAG, "  Failed to read inbound filtering settings: ${t.message}")
             null
         } finally {
             connection.disconnect()
         }
     }
+
+    private data class InboundSettings(
+        val trustAllContacts: Boolean,
+        val allowAllInbound: Boolean,
+    )
 }

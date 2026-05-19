@@ -86,6 +86,10 @@ pub struct ContactsConfig {
     /// Treat all contacts/numbers as trusted at runtime.
     #[serde(default)]
     pub trust_all_contacts: bool,
+
+    /// Allow all inbound calls/messages without requiring contact lookup.
+    #[serde(default)]
+    pub allow_all_inbound: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
