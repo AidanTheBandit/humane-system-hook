@@ -322,11 +322,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let provider_label = config.llm.provider.as_str().to_uppercase();
     info!("============================================================");
-    info!("Humane HTTP server listening on {}", http_bind_addr);
-    info!(
-        "Humane gRPC server listening on {} (plaintext)",
-        grpc_bind_addr
-    );
+    info!("HTTP server listening on {}", http_bind_addr);
+    info!("gRPC server listening on {}", grpc_bind_addr);
     info!("Upload URL base: http://{}/upload/", public_addr);
     info!(
         "LLM provider: {} (model: {})",
@@ -339,45 +336,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if has_weather_key {
         info!("Weather: PirateWeather API key configured");
     } else {
-        info!("Weather: no API key. EncryptedWeather will return UNAVAILABLE");
+        info!("Weather: not configured");
     }
     info!(
         "Storage: media_dir={}, db={}",
         config.storage.media_dir, config.storage.db_path
     );
-    info!("Services:");
-    info!(
-        "  - humane.aibus.AIBusService/Understand       ({})",
-        config.llm.provider
-    );
-    info!(
-        "  - humane.aibus.AIBusService/AnalyzeImage     ({}, vision)",
-        config.llm.provider
-    );
-    info!("  - humane.pushrelay.PushRelayService/Subscribe (push stream)");
-    info!("  - humane.pushrelay.PushRelayService/GetPushTokens (empty)");
-    info!("  - humane.featureflags.FeatureFlagsService/GetFlags (empty)");
-    info!("  - humane.account.WifiConfigService/ListSecureWifiConfigs (empty)");
-    info!("  - humane.account.UserInformationService/GetUserPersonalDetails (stub)");
-    info!("  - humane.contacts.ContactsRPCService/GetContacts (sqlite contacts)");
-    info!("  - humane.events.EventsIngestService/Ingest (discard)");
-    info!("  - humane.events.EventsIngestService/IngestBatch (discard)");
-    info!("  - humane.provisioning.DeviceOnboardingDACService/* (onboarding)");
-    info!("  - humane.capture.CaptureService/* (photo/video/note storage)");
-    info!("  - humane.aibus.AIBusService/EncryptedUnderstand (LLM)");
-    info!("  - humane.aibus.AIBusService/EncryptedAnalyzeImage (vision)");
-    info!("  - humane.aibus.AIBusService/EncryptedCompletion (LLM)");
-    info!("  - humane.aibus.AIBusService/EncryptedChatCompletion (LLM)");
-    info!("  - humane.aibus.AIBusService/EncryptedNearbySearch (Overpass/OSM)");
-    info!("  - humane.aibus.AIBusService/EncryptedReverseGeocode (Nominatim/OSM)");
-    info!("  - humane.aibus.AIBusService/EncryptedGeoLocate (stub: device GPS preferred)");
-    info!("  - humane.privacy.grpc.pub.PublicPrivacyService/* (stub — empty responses)");
-    info!("  - PUT /upload/:uuid/:filename (HTTP media upload)");
-    info!("  - GET /api/* (REST API for web portal)");
-    info!("  - GET /api/events (NDJSON event stream)");
-    info!("  - GET /api/logs/server (rolling log file dump)");
-    info!("  - GET /api/logs/logcat (Android only)");
-    info!("  - All other RPCs: UNIMPLEMENTED");
     info!("============================================================");
 
     type AiBus = AiBusServiceServer<AiBusServiceImpl>;
