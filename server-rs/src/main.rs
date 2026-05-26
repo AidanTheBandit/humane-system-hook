@@ -14,6 +14,7 @@ mod nearby;
 mod services;
 mod storage;
 mod synapse;
+mod util;
 
 /// Generated protobuf/gRPC modules.
 #[allow(unused)]

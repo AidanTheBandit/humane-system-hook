@@ -5,7 +5,9 @@ syntax = "proto3";
 
 package humane.events;
 
+import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
+import "humane/common/encryption.proto";
 
 option java_multiple_files = true;
 
@@ -15,76 +17,15 @@ message UUID {
   string value = 1;
 }
 
-enum EventType {
-  UNSPECIFIED = 0;
-  AI_MIC_START = 1;
-  AI_MIC_END = 2;
-  AI_MIC_CANCELLED = 3;
-  VISION_START = 4;
-  VISION_END = 5;
-  VISION_CANCELLED = 6;
-  MUSIC_START = 7;
-  MUSIC_END = 8;
-  TRANSLATION_START = 9;
-  TRANSLATION_END = 10;
-  PHONE_CALL_START = 11;
-  PHONE_CALL_END = 12;
-  PHONE_CALL_MISSED = 13;
-  MESSAGE_SENT = 14;
-  MESSAGE_RECEIVED = 15;
-  NAVIGATION_START = 16;
-  NAVIGATION_END = 17;
-  CATCH_ME_UP_START = 18;
-  CATCH_ME_UP_END = 19;
-  DEVICE_PICKUP = 20;
-  DEVICE_PUTDOWN = 21;
-  SCREEN_ON = 22;
-  SCREEN_OFF = 23;
-  CHARGE_START = 24;
-  CHARGE_END = 25;
-  BOOT_COMPLETE = 26;
-  SHUTDOWN = 27;
-  GESTURE_TAP = 28;
-  GESTURE_DOUBLE_TAP = 29;
-  GESTURE_LONG_PRESS = 30;
-  GESTURE_SWIPE_FORWARD = 31;
-  GESTURE_SWIPE_BACKWARD = 32;
-  GESTURE_TOUCH_HOLD = 33;
-  GESTURE_TOUCH_RELEASE = 34;
-  HEAD_TILT_UP = 35;
-  HEAD_TILT_DOWN = 36;
-  ALARM_TRIGGERED = 37;
-  TIMER_TRIGGERED = 38;
-  NOTIFICATION_SHOWN = 39;
-  NOTIFICATION_DISMISSED = 40;
-  CAMERA_CAPTURE = 41;
-  VIDEO_START = 42;
-  VIDEO_END = 43;
-  NOTE_CREATED = 44;
-  MEDIA_UPLOAD_START = 45;
-  MEDIA_UPLOAD_END = 46;
-  OTA_START = 47;
-  OTA_END = 48;
-  WIFI_CONNECT = 49;
-  WIFI_DISCONNECT = 50;
-  CELLULAR_CONNECT = 51;
-  CELLULAR_DISCONNECT = 52;
-  BLUETOOTH_CONNECT = 53;
-  BLUETOOTH_DISCONNECT = 54;
-  BATTERY_LOW = 55;
-  BATTERY_CRITICAL = 56;
-  THERMAL_WARNING = 57;
-  THERMAL_CRITICAL = 58;
-  POSSUM_MODE_ENTER = 59;
-  POSSUM_MODE_EXIT = 60;
-  CELLULAR_RECONNECT = 61;
-}
-
 message NotableEvent {
   UUID event_identifier = 1;
-  EventType event_type = 2;
-  google.protobuf.Timestamp timestamp = 3;
-  string data = 4;
+  string originator_identifier = 2;
+  google.protobuf.Timestamp creation_time = 3;
+  google.protobuf.Struct event_data = 4;
+  string event_type = 5;
+  humane.common.encryption.EncryptedData encrypted_event_data = 6;
+  humane.common.encryption.EncryptedData encrypted_location = 7;
+  bool device_is_locked = 8;
 }
 
 message IngestResponse {

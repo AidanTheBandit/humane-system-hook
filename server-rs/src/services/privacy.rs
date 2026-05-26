@@ -40,7 +40,6 @@ impl PublicPrivacyService for PublicPrivacyServiceImpl {
     ) -> Result<Response<RequestKeysResponse>, Status> {
         let inner = request.into_inner();
         info!(">>> PublicPrivacy.RequestKeys ({} kids)", inner.kids.len());
-        // Return empty key list — "no keys available"
         Ok(Response::new(RequestKeysResponse::default()))
     }
 

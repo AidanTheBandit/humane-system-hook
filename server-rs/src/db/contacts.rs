@@ -1,8 +1,9 @@
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+
+use crate::util::now_unix_millis;
 
 use super::Database;
 
@@ -250,13 +251,6 @@ impl Database {
         })
         .await?
     }
-}
-
-fn now_unix_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 fn normalize_contact(mut contact: ContactRecord) -> ContactRecord {
