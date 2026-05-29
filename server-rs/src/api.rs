@@ -5,6 +5,7 @@
 //! public HTTPS portal can reach this HTTP server on the LAN.
 
 mod contacts;
+mod dev;
 pub mod device;
 
 use std::path::PathBuf;
@@ -101,6 +102,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/wifi/set-enabled", put(set_wifi_enabled))
         .route("/api/logs/server", get(get_server_logs))
         .route("/api/logs/logcat", get(get_logcat_logs))
+        .nest("/api/dev", dev::router())
         .route("/api/esim/state", get(get_esim_state))
         .route("/api/esim/events", get(esim_event_stream))
         .route("/api/esim/requests/{request_id}", get(get_esim_request))
@@ -226,6 +228,7 @@ struct SettingsResponse {
     storage: StorageSettingsResponse,
     weather: WeatherSettingsResponse,
     contacts: ContactsSettingsResponse,
+    dev: DevSettingsResponse,
 }
 
 #[derive(Serialize)]
@@ -264,6 +267,11 @@ struct ContactsSettingsResponse {
     allow_all_inbound: bool,
 }
 
+#[derive(Serialize)]
+struct DevSettingsResponse {
+    apk_install_enabled: bool,
+}
+
 async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
     let config = state.shared_config.read().await;
     Json(SettingsResponse {
@@ -292,6 +300,9 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
         contacts: ContactsSettingsResponse {
             trust_all_contacts: config.contacts.trust_all_contacts,
             allow_all_inbound: config.contacts.allow_all_inbound,
+        },
+        dev: DevSettingsResponse {
+            apk_install_enabled: config.dev.apk_install_enabled,
         },
     })
 }
@@ -625,6 +636,7 @@ struct UpdateSettingsRequest {
     server: Option<UpdateServerSettings>,
     weather: Option<UpdateWeatherSettings>,
     contacts: Option<UpdateContactsSettings>,
+    dev: Option<UpdateDevSettings>,
     /// Storage is read-only; presence in the request is rejected.
     storage: Option<serde_json::Value>,
 }
@@ -660,6 +672,11 @@ struct UpdateWeatherSettings {
 struct UpdateContactsSettings {
     trust_all_contacts: Option<bool>,
     allow_all_inbound: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct UpdateDevSettings {
+    apk_install_enabled: Option<bool>,
 }
 
 async fn update_settings(
@@ -813,6 +830,13 @@ async fn update_settings(
         }
     }
 
+    // --- Dev changes ---
+    if let Some(ref dev) = body.dev {
+        if let Some(new_val) = dev.apk_install_enabled {
+            config.dev.apk_install_enabled = new_val;
+        }
+    }
+
     // --- Validate: try building a new LLM agent before committing ---
     if llm_changed {
         // Build the agent (sync) and convert the error to String immediately
@@ -889,6 +913,9 @@ async fn update_settings(
         contacts: ContactsSettingsResponse {
             trust_all_contacts: config.contacts.trust_all_contacts,
             allow_all_inbound: config.contacts.allow_all_inbound,
+        },
+        dev: DevSettingsResponse {
+            apk_install_enabled: config.dev.apk_install_enabled,
         },
     };
 
@@ -995,6 +1022,12 @@ fn persist_config_inner(
         let table = ensure_table(&mut doc, "contacts");
         table["trust_all_contacts"] = toml_edit::value(config.contacts.trust_all_contacts);
         table["allow_all_inbound"] = toml_edit::value(config.contacts.allow_all_inbound);
+    }
+
+    // --- [dev] ---
+    {
+        let table = ensure_table(&mut doc, "dev");
+        table["apk_install_enabled"] = toml_edit::value(config.dev.apk_install_enabled);
     }
 
     // Create .bak before writing

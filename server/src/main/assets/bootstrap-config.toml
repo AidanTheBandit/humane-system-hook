@@ -27,3 +27,6 @@ db_path = "__APP_DB_PATH__"
 
 [logging]
 log_dir = "__APP_LOG_DIR__"
+
+[dev]
+apk_install_enabled = false

@@ -17,6 +17,8 @@ pub struct Config {
     pub contacts: ContactsConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub dev: DevConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +143,13 @@ pub struct LoggingConfig {
     pub max_files: usize,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct DevConfig {
+    /// Enable remote APK installs.
+    #[serde(default)]
+    pub apk_install_enabled: bool,
+}
+
 fn default_log_file_prefix() -> String {
     "humane-server".into()
 }
@@ -263,6 +272,7 @@ impl Config {
                 weather: WeatherConfig::default(),
                 contacts: ContactsConfig::default(),
                 logging: LoggingConfig::default(),
+                dev: DevConfig::default(),
             }
         };
 
