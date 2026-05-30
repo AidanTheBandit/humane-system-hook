@@ -29,13 +29,19 @@
 
 ```
 /Users/adam/code/aipin/openPin/humane-system-hook/
-  hook/       — Loaded into ironman's process (AliuHook + Frida Gadget)
+  hook/       — Loaded into ironman's process (AliuHook; optional Frida Gadget)
   injector/   — Runs in system_server (PMS mutation via reflection)
 ```
 
 ## Frida Access
 
-Frida Gadget 17.9.1 is loaded into ironman's main process, listening on `0.0.0.0:27042` with `on_load: resume` and `on_port_conflict: pick-next`. The voiceinteractor sub-process gets the next available port (27043).
+Frida Gadget 17.9.1 is not packaged by default. To include it in the APK, build with `-PincludeFrida=true`:
+
+```bash
+./gradlew :hook:assembleRelease -PincludeFrida=true
+```
+
+When packaged, Frida Gadget is loaded into ironman's main process, listening on `0.0.0.0:27042` with `on_load: resume` and `on_port_conflict: pick-next`. The voiceinteractor sub-process gets the next available port (27043).
 
 ```bash
 # Connect (replace <pin-ip> with device WiFi IP)
