@@ -49,3 +49,6 @@ openssl = { version = "*", features = ["vendored"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"
+
+[dev-dependencies]
+tempfile = "3"

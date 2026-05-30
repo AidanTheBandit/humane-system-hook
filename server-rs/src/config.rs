@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// Top-level configuration, loaded from `config.toml`.
@@ -257,24 +257,28 @@ impl Default for WeatherConfig {
 
 impl Config {
     /// Load config from file. Falls back to defaults if file is missing.
+    /// If a sibling `config.local.toml` exists, it is recursively merged over
+    /// the selected config file for local development overrides.
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let config = if path.exists() {
+        let mut config_value = if path.exists() {
             let contents = std::fs::read_to_string(path)?;
-            let config: Config = toml::from_str(&contents)?;
+            let value: toml::Value = toml::from_str(&contents)?;
             info!(?path, "loaded config");
-            config
+            value
         } else {
             info!(?path, "config file not found, using defaults");
-            Config {
-                llm: LlmConfig::default(),
-                server: ServerConfig::default(),
-                storage: StorageConfig::default(),
-                weather: WeatherConfig::default(),
-                contacts: ContactsConfig::default(),
-                logging: LoggingConfig::default(),
-                dev: DevConfig::default(),
-            }
+            toml::Value::Table(toml::map::Map::new())
         };
+
+        let local_path = local_config_path(path);
+        if local_path.exists() {
+            let contents = std::fs::read_to_string(&local_path)?;
+            let local_value: toml::Value = toml::from_str(&contents)?;
+            merge_toml(&mut config_value, local_value);
+            info!(path = ?local_path, base_path = ?path, "loaded local config override");
+        }
+
+        let config: Config = config_value.try_into()?;
 
         #[cfg(target_os = "android")]
         {
@@ -295,6 +299,30 @@ impl Config {
         }
 
         Ok(config)
+    }
+}
+
+fn local_config_path(path: &Path) -> PathBuf {
+    path.parent()
+        .map(|parent| parent.join("config.local.toml"))
+        .unwrap_or_else(|| PathBuf::from("config.local.toml"))
+}
+
+fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base_table), toml::Value::Table(overlay_table)) => {
+            for (key, overlay_value) in overlay_table {
+                match base_table.get_mut(&key) {
+                    Some(base_value) => merge_toml(base_value, overlay_value),
+                    None => {
+                        base_table.insert(key, overlay_value);
+                    }
+                }
+            }
+        }
+        (base_value, overlay_value) => {
+            *base_value = overlay_value;
+        }
     }
 }
 
@@ -329,5 +357,136 @@ impl WeatherConfig {
         self.pirate_weather_api_key
             .clone()
             .filter(|k| !k.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_config(dir: &tempfile::TempDir, file_name: &str, contents: &str) -> PathBuf {
+        let path = dir.path().join(file_name);
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn missing_config_files_use_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(&dir.path().join("config.toml")).unwrap();
+
+        assert_eq!(config.llm.provider, LlmProvider::Echo);
+        assert_eq!(config.server.http_bind_addr, default_http_bind_addr());
+        assert_eq!(config.storage.media_dir, default_media_dir());
+    }
+
+    #[test]
+    fn loads_base_config_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[llm]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[server]
+public_addr = "192.0.2.10:8080"
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.llm.provider, LlmProvider::OpenAi);
+        assert_eq!(config.llm.model, "gpt-4.1-mini");
+        assert_eq!(config.server.public_addr, "192.0.2.10:8080");
+        assert_eq!(config.server.http_bind_addr, default_http_bind_addr());
+    }
+
+    #[test]
+    fn local_config_overrides_base_scalars() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[llm]
+provider = "echo"
+model = "base-model"
+"#,
+        );
+        write_config(
+            &dir,
+            "config.local.toml",
+            r#"
+[llm]
+provider = "anthropic"
+model = "local-model"
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.llm.provider, LlmProvider::Anthropic);
+        assert_eq!(config.llm.model, "local-model");
+    }
+
+    #[test]
+    fn local_config_merges_nested_tables_without_replacing_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[server]
+http_bind_addr = "0.0.0.0:8081"
+grpc_bind_addr = "127.0.0.1:9091"
+public_addr = "base.example:8081"
+"#,
+        );
+        write_config(
+            &dir,
+            "config.local.toml",
+            r#"
+[server]
+public_addr = "local.example:8081"
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.server.http_bind_addr, "0.0.0.0:8081");
+        assert_eq!(config.server.grpc_bind_addr, "127.0.0.1:9091");
+        assert_eq!(config.server.public_addr, "local.example:8081");
+    }
+
+    #[test]
+    fn local_only_partial_config_preserves_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.toml");
+        write_config(
+            &dir,
+            "config.local.toml",
+            r#"
+[storage]
+media_dir = "./local-media"
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.storage.media_dir, "./local-media");
+        assert_eq!(config.storage.db_path, default_db_path());
+        assert_eq!(config.server.http_bind_addr, default_http_bind_addr());
+    }
+
+    #[test]
+    fn invalid_local_config_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(&dir, "custom.toml", "[llm]\nprovider = \"echo\"\n");
+        write_config(&dir, "config.local.toml", "[llm\nprovider = \"openai\"\n");
+
+        assert!(Config::load(&path).is_err());
     }
 }

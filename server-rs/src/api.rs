@@ -855,12 +855,10 @@ async fn update_settings(
                 );
             }
             Err(e) => {
-                // Rollback config changes: re-read from the file since we already mutated in-place.
+                // Rollback config changes: reload the effective config since we already mutated in-place.
                 warn!(error = %e, "failed to build LLM agent with new settings, rolling back");
-                if let Ok(contents) = std::fs::read_to_string(&state.config_path) {
-                    if let Ok(restored) = toml::from_str::<Config>(&contents) {
-                        *config = restored;
-                    }
+                if let Ok(restored) = Config::load(&state.config_path) {
+                    *config = restored;
                 }
                 return (
                     StatusCode::BAD_REQUEST,
