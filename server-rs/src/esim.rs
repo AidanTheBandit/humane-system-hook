@@ -91,6 +91,20 @@ struct BridgeEnvelope {
 
 impl EsimBridge {
     pub fn start() -> Self {
+        #[cfg(not(target_os = "android"))]
+        {
+            return Self {
+                state: Arc::new(BridgeState {
+                    connected: RwLock::new(false),
+                    requests: Mutex::new(HashMap::new()),
+                    acceptance_waiters: Mutex::new(HashMap::new()),
+                    command_tx: mpsc::unbounded_channel().0,
+                    events_tx: broadcast::channel(1).0,
+                }),
+            };
+        }
+
+        #[allow(unreachable_code)]
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (events_tx, _) = broadcast::channel(256);
         let state = Arc::new(BridgeState {
