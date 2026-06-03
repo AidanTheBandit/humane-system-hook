@@ -21,6 +21,23 @@ pub struct Config {
     pub dev: DevConfig,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedConfig {
+    pub config: Config,
+    pub pirate_weather_api_key: Option<String>,
+}
+
+impl ResolvedConfig {
+    pub fn resolve(config: Config) -> Self {
+        let pirate_weather_api_key = config.weather.resolve_api_key();
+
+        Self {
+            config,
+            pirate_weather_api_key,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LlmProvider {
@@ -449,8 +466,14 @@ max_tool_turns = 3
 
         assert!(!config.llm.tools.enabled);
         assert_eq!(config.llm.tools.max_tool_turns, 3);
-        assert_eq!(config.llm.tools.dynamic_tool_count, default_dynamic_tool_count());
-        assert_eq!(config.llm.tools.tool_concurrency, default_tool_concurrency());
+        assert_eq!(
+            config.llm.tools.dynamic_tool_count,
+            default_dynamic_tool_count()
+        );
+        assert_eq!(
+            config.llm.tools.tool_concurrency,
+            default_tool_concurrency()
+        );
     }
 
     #[test]

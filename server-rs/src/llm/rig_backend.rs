@@ -9,7 +9,7 @@ use rig::completion::CompletionModel;
 use rig::completion::{Message, Prompt};
 use tracing::error;
 
-use crate::config::LlmConfig;
+use crate::config::ResolvedConfig;
 
 use super::backend::{LlmBackend, LlmFuture};
 use super::error::friendly_error_message;
@@ -41,7 +41,7 @@ where
         provider_label: &'static str,
         client: C,
         request_logger: LlmRequestLogger,
-        config: &LlmConfig,
+        config: &ResolvedConfig,
         http_client: HttpClient,
         customize_builder: F,
     ) -> Result<Arc<dyn LlmBackend>, Box<dyn std::error::Error + Send + Sync>>
@@ -49,15 +49,17 @@ where
         C: CompletionClient<CompletionModel = M>,
         F: FnOnce(AgentBuilder<M>) -> AgentBuilder<M>,
     {
-        let builder = customize_builder(client.agent(&config.model));
+        let llm_config = &config.config.llm;
+        let builder = customize_builder(client.agent(&llm_config.model));
 
-        let tool_resources = if config.tools.enabled {
-            let tool_context = LlmToolContext::new(http_client);
-            tool_context.build_tool_resources(config).await.map_err(
-                |err| -> Box<dyn std::error::Error + Send + Sync> {
+        let tool_resources = if llm_config.tools.enabled {
+            let tool_context = LlmToolContext::new(http_client, config);
+            tool_context
+                .build_tool_resources(llm_config)
+                .await
+                .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> {
                     std::io::Error::new(std::io::ErrorKind::Other, err).into()
-                },
-            )?
+                })?
         } else {
             None
         };
@@ -71,8 +73,8 @@ where
             provider_label,
             agent,
             request_logger,
-            max_tool_turns: config.tools.max_tool_turns,
-            tool_concurrency: config.tools.tool_concurrency,
+            max_tool_turns: llm_config.tools.max_tool_turns,
+            tool_concurrency: llm_config.tools.tool_concurrency,
         }))
     }
 }

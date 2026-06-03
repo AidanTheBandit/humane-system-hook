@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use prost::Message as _;
-use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
@@ -12,11 +11,11 @@ use crate::proto::aibus::*;
 use crate::proto::common::encryption::EncryptedData;
 
 pub struct VisionHandler {
-    agent: Arc<RwLock<Arc<LlmAgent>>>,
+    agent: Arc<LlmAgent>,
 }
 
 impl VisionHandler {
-    pub fn new(agent: Arc<RwLock<Arc<LlmAgent>>>) -> Self {
+    pub fn new(agent: Arc<LlmAgent>) -> Self {
         Self { agent }
     }
 
@@ -59,8 +58,7 @@ impl VisionHandler {
 
         let image_b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
 
-        let agent = self.agent.read().await.clone();
-        let observation = match agent.vision_prompt(question, &image_b64).await {
+        let observation = match self.agent.vision_prompt(question, &image_b64).await {
             Ok(text) => text,
             Err(error) => {
                 warn!(error = %error, "Vision LLM failed");

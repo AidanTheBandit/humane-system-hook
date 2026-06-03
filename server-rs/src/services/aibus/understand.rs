@@ -9,10 +9,8 @@ use tracing::{debug, info, warn};
 
 use std::sync::Arc;
 
-use tokio::sync::RwLock;
-
 use super::envelope::unwrap_plaintext_data;
-use crate::config::Config;
+use crate::config::ResolvedConfig;
 use crate::db::Database;
 use crate::llm::{LlmAgent, LlmChatRequest, PromptTemplateContext, PromptTemplates};
 use crate::proto::aibus::*;
@@ -21,17 +19,13 @@ use crate::synapse::conversation::extract_history;
 use crate::synapse::vision::{extract_vision_observation, is_vision_request};
 
 pub struct UnderstandHandler {
-    agent: Arc<RwLock<Arc<LlmAgent>>>,
-    config: Arc<RwLock<Config>>,
+    agent: Arc<LlmAgent>,
+    config: Arc<ResolvedConfig>,
     db: Database,
 }
 
 impl UnderstandHandler {
-    pub fn new(
-        agent: Arc<RwLock<Arc<LlmAgent>>>,
-        config: Arc<RwLock<Config>>,
-        db: Database,
-    ) -> Self {
+    pub fn new(agent: Arc<LlmAgent>, config: Arc<ResolvedConfig>, db: Database) -> Self {
         Self { agent, config, db }
     }
 
@@ -39,7 +33,7 @@ impl UnderstandHandler {
         &self,
         req: &SynapseUnderstandingRequest,
         run_id: &str,
-        config: &Config,
+        config: &ResolvedConfig,
     ) -> PromptTemplateContext {
         // TODO: Expose specific device fields, like battery level, wifi/cellular status, etc.
         let mut context = PromptTemplateContext::new(run_id, config, chrono::Local::now());
@@ -179,20 +173,18 @@ impl UnderstandHandler {
             }
         }
 
-        let config = self.config.read().await.clone();
         let templates = PromptTemplates {
-            system_prompt: config.server.system_prompt.clone(),
-            status_prompt: config.server.status_prompt.clone(),
+            system_prompt: self.config.config.server.system_prompt.clone(),
+            status_prompt: self.config.config.server.status_prompt.clone(),
         };
-        let template_context = self.build_prompt_template_context(&req, &run_id, &config);
+        let template_context = self.build_prompt_template_context(&req, &run_id, &self.config);
         let chat_request = LlmChatRequest::new(
             utterance.clone(),
             history.clone(),
             templates,
             template_context,
         );
-        let agent = self.agent.read().await.clone();
-        let response_text = match agent.chat(chat_request).await {
+        let response_text = match self.agent.chat(chat_request).await {
             Ok(text) => text,
             Err(error) => {
                 warn!(error = %error, "LLM chat failed, falling back to error message");

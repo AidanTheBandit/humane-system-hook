@@ -53,6 +53,12 @@ impl DedupRouter {
         }
     }
 
+    pub fn handle(&self) -> DedupHandle {
+        DedupHandle {
+            inner: self.dedup.inner.clone(),
+        }
+    }
+
     /// Add a service without dedup.
     pub fn add_service<S>(mut self, svc: S) -> Self
     where
@@ -98,6 +104,19 @@ impl DedupRouter {
                 self.dedup,
                 dedup_middleware,
             ))
+    }
+}
+
+#[derive(Clone)]
+pub struct DedupHandle {
+    inner: Arc<Mutex<Inner>>,
+}
+
+impl DedupHandle {
+    pub async fn clear(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.inflight.clear();
+        inner.cache.clear();
     }
 }
 

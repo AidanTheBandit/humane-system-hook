@@ -86,7 +86,6 @@ use proto::privacy::pub_::public_privacy_service_server::PublicPrivacyServiceSer
 use proto::provisioning::device_onboarding_dac_service_server::DeviceOnboardingDacServiceServer;
 use proto::pushrelay::push_relay_service_server::PushRelayServiceServer;
 
-use services::aibus::AiBusServiceImpl;
 use services::capture::CaptureServiceImpl;
 use services::contacts::ContactsRpcServiceImpl;
 use services::events::EventsIngestServiceImpl;
@@ -98,7 +97,7 @@ use services::pushrelay::PushRelayServiceImpl;
 use services::user_info::UserInformationServiceImpl;
 use services::wifi_config::WifiConfigServiceImpl;
 
-use config::Config;
+use config::{Config, ResolvedConfig};
 use db::Database;
 use dedup::DedupRouter;
 use llm::{LlmAgent, LlmRequestLogger};
@@ -109,6 +108,7 @@ use tracing::{info, warn};
 use std::time::Duration;
 
 use crate::api::device::DeviceVersionCollector;
+use crate::services::aibus::AiBus;
 
 #[cfg(not(target_os = "android"))]
 fn load_dotenv(config_path: &FsPath) {
@@ -296,18 +296,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| PathBuf::from("logs"));
     let llm_request_logger = LlmRequestLogger::new(llm_request_log_dir);
 
-    // Build LLM agent (behind RwLock for hot-reload)
-    let agent = Arc::new(
-        LlmAgent::from_config(&config.llm, http_client.clone(), llm_request_logger.clone())
-            .await
-            .map_err(|err| -> Box<dyn std::error::Error> { err })?,
-    );
-    let shared_agent = Arc::new(RwLock::new(agent));
+    let resolved_config = Arc::new(ResolvedConfig::resolve(config.clone()));
+    let has_weather_key = resolved_config.pirate_weather_api_key.is_some();
 
-    // Resolve PirateWeather API key for weather service (behind RwLock for hot-reload)
-    let pirate_weather_api_key = config.weather.resolve_api_key();
-    let has_weather_key = pirate_weather_api_key.is_some();
-    let shared_weather_key = Arc::new(RwLock::new(pirate_weather_api_key));
+    let agent = Arc::new(
+        LlmAgent::from_config(
+            &resolved_config,
+            http_client.clone(),
+            llm_request_logger.clone(),
+        )
+        .await
+        .map_err(|err| -> Box<dyn std::error::Error> { err })?,
+    );
 
     // Generate ephemeral CA for signing DUC certificates during onboarding
     let onboarding_ca = Arc::new(OnboardingCa::generate()?);
@@ -357,7 +357,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     info!("============================================================");
 
-    type AiBus = AiBusServiceServer<AiBusServiceImpl>;
+    type AiBusServer = AiBusServiceServer<AiBus>;
 
     // Shared config for hot-reload via the web portal
     let shared_config = Arc::new(RwLock::new(config.clone()));
@@ -366,51 +366,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let log_dir_for_api: Option<PathBuf> = config.logging.log_dir.as_ref().map(PathBuf::from);
     let log_file_prefix_for_api: String = config.logging.file_prefix.clone();
 
-    // Build the gRPC service stack as a native axum::Router.
-    let grpc_router = DedupRouter::new(AiBusServiceServer::new(AiBusServiceImpl::new(
-        shared_agent.clone(),
-        shared_config.clone(),
-        shared_weather_key.clone(),
+    let aibus = AiBus::new(
+        agent.clone(),
+        resolved_config.clone(),
         nearby::NearbyClient::new(http_client.clone()),
         http_client.clone(),
         database.clone(),
-    )))
-    .dedup::<AiBus>("EncryptedWeather", Duration::from_secs(300))
-    .dedup::<AiBus>("EncryptedNearbySearch", Duration::from_secs(30))
-    .dedup::<AiBus>("EncryptedReverseGeocode", Duration::from_secs(30))
-    .dedup::<AiBus>("EncryptedUnderstand", Duration::from_millis(200))
-    .dedup::<AiBus>("EncryptedAnalyzeImage", Duration::from_millis(200))
-    .dedup::<AiBus>("EncryptedCompletion", Duration::from_millis(200))
-    .dedup::<AiBus>("EncryptedChatCompletion", Duration::from_millis(200))
-    .dedup::<AiBus>("Understand", Duration::from_millis(200))
-    .dedup::<AiBus>("AnalyzeImage", Duration::from_millis(200))
-    .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
-    .add_service(FeatureFlagsServiceServer::new(FeatureFlagsServiceImpl))
-    .add_service(WifiConfigServiceServer::new(WifiConfigServiceImpl))
-    .add_service(UserInformationServiceServer::new(
-        UserInformationServiceImpl,
-    ))
-    .add_service(ContactsRpcServiceServer::new(ContactsRpcServiceImpl {
-        db: database.clone(),
-    }))
-    .add_service(EventsIngestServiceServer::new(EventsIngestServiceImpl))
-    .add_service(DeviceOnboardingDacServiceServer::new(
-        ProvisioningServiceImpl {
-            ca: onboarding_ca,
-            display_name,
-            user_id,
-        },
-    ))
-    .add_service(CaptureServiceServer::new(CaptureServiceImpl {
-        store: media_store.clone(),
-        server_addr: public_addr.clone(),
-        events_tx: events_tx.clone(),
-    }))
-    .add_service(PublicPrivacyServiceServer::new(PublicPrivacyServiceImpl))
-    .add_service(PartnerTokenRpcServiceServer::new(PartnerServicesImpl))
-    .into_axum_router()
-    .fallback(fallback_handler)
-    .layer(axum::middleware::from_fn(log_grpc_unimplemented));
+    );
+
+    // Build the gRPC service stack as a native axum::Router.
+    let dedup_router = DedupRouter::new(AiBusServiceServer::new(aibus.clone()))
+        .dedup::<AiBusServer>("EncryptedWeather", Duration::from_secs(300))
+        .dedup::<AiBusServer>("EncryptedNearbySearch", Duration::from_secs(30))
+        .dedup::<AiBusServer>("EncryptedReverseGeocode", Duration::from_secs(30))
+        .dedup::<AiBusServer>("EncryptedUnderstand", Duration::from_millis(200))
+        .dedup::<AiBusServer>("EncryptedAnalyzeImage", Duration::from_millis(200))
+        .dedup::<AiBusServer>("EncryptedCompletion", Duration::from_millis(200))
+        .dedup::<AiBusServer>("EncryptedChatCompletion", Duration::from_millis(200))
+        .dedup::<AiBusServer>("Understand", Duration::from_millis(200))
+        .dedup::<AiBusServer>("AnalyzeImage", Duration::from_millis(200))
+        .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
+        .add_service(FeatureFlagsServiceServer::new(FeatureFlagsServiceImpl))
+        .add_service(WifiConfigServiceServer::new(WifiConfigServiceImpl))
+        .add_service(UserInformationServiceServer::new(
+            UserInformationServiceImpl,
+        ))
+        .add_service(ContactsRpcServiceServer::new(ContactsRpcServiceImpl {
+            db: database.clone(),
+        }))
+        .add_service(EventsIngestServiceServer::new(EventsIngestServiceImpl))
+        .add_service(DeviceOnboardingDacServiceServer::new(
+            ProvisioningServiceImpl {
+                ca: onboarding_ca,
+                display_name,
+                user_id,
+            },
+        ))
+        .add_service(CaptureServiceServer::new(CaptureServiceImpl {
+            store: media_store.clone(),
+            server_addr: public_addr.clone(),
+            events_tx: events_tx.clone(),
+        }))
+        .add_service(PublicPrivacyServiceServer::new(PublicPrivacyServiceImpl))
+        .add_service(PartnerTokenRpcServiceServer::new(PartnerServicesImpl));
+    let dedup = dedup_router.handle();
+    let grpc_router = dedup_router
+        .into_axum_router()
+        .fallback(fallback_handler)
+        .layer(axum::middleware::from_fn(log_grpc_unimplemented));
 
     // Build the axum HTTP router for upload endpoint
     let upload_state = UploadState {
@@ -427,10 +430,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         events_tx,
         config_path,
         shared_config,
-        shared_agent,
+        aibus,
+        dedup,
         llm_request_logger,
         http_client: http_client.clone(),
-        shared_weather_key,
         log_dir: log_dir_for_api,
         log_file_prefix: log_file_prefix_for_api,
         esim_bridge,

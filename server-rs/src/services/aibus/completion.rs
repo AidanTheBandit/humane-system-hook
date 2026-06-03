@@ -1,23 +1,22 @@
 use std::sync::Arc;
 
 use prost::Message as _;
-use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
 use super::envelope::unwrap_plaintext_data;
-use crate::config::Config;
+use crate::config::ResolvedConfig;
 use crate::llm::{LlmAgent, LlmChatRequest, PromptTemplateContext, PromptTemplates};
 use crate::proto::aibus::*;
 use crate::proto::common::encryption::EncryptedData;
 
 pub struct CompletionHandler {
-    agent: Arc<RwLock<Arc<LlmAgent>>>,
-    config: Arc<RwLock<Config>>,
+    agent: Arc<LlmAgent>,
+    config: Arc<ResolvedConfig>,
 }
 
 impl CompletionHandler {
-    pub fn new(agent: Arc<RwLock<Arc<LlmAgent>>>, config: Arc<RwLock<Config>>) -> Self {
+    pub fn new(agent: Arc<LlmAgent>, config: Arc<ResolvedConfig>) -> Self {
         Self { agent, config }
     }
 
@@ -46,19 +45,18 @@ impl CompletionHandler {
             messages = chat_req.messages.len(),
             ">>> EncryptedChatCompletion"
         );
-        let config = self.config.read().await.clone();
-        let agent = self.agent.read().await.clone();
-        let response_text = agent
+        let response_text = self
+            .agent
             .chat(LlmChatRequest::new(
                 prompt,
                 Vec::new(),
                 PromptTemplates {
-                    system_prompt: config.server.system_prompt.clone(),
-                    status_prompt: config.server.status_prompt.clone(),
+                    system_prompt: self.config.config.server.system_prompt.clone(),
+                    status_prompt: self.config.config.server.status_prompt.clone(),
                 },
                 PromptTemplateContext::new(
                     "encrypted-chat-completion",
-                    &config,
+                    &self.config,
                     chrono::Local::now(),
                 ),
             ))
@@ -104,17 +102,20 @@ impl CompletionHandler {
             prompt_len = completion_req.prompt.len(),
             ">>> EncryptedCompletion"
         );
-        let config = self.config.read().await.clone();
-        let agent = self.agent.read().await.clone();
-        let response_text = agent
+        let response_text = self
+            .agent
             .chat(LlmChatRequest::new(
                 completion_req.prompt,
                 Vec::new(),
                 PromptTemplates {
-                    system_prompt: config.server.system_prompt.clone(),
-                    status_prompt: config.server.status_prompt.clone(),
+                    system_prompt: self.config.config.server.system_prompt.clone(),
+                    status_prompt: self.config.config.server.status_prompt.clone(),
                 },
-                PromptTemplateContext::new("encrypted-completion", &config, chrono::Local::now()),
+                PromptTemplateContext::new(
+                    "encrypted-completion",
+                    &self.config,
+                    chrono::Local::now(),
+                ),
             ))
             .await
             .unwrap_or_else(|error| {

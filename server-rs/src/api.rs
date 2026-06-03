@@ -23,13 +23,16 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
-use crate::config::{Config, LlmProvider};
+use crate::config::{Config, LlmProvider, ResolvedConfig};
 use crate::db::Database;
+use crate::dedup::DedupHandle;
 use crate::esim::{
     CellularStatusError, DeviceToggleError, EsimBridge, EsimRequestError, EsimRequestRecord,
     EsimSnapshot,
 };
 use crate::llm::{validate_prompt_template, LlmAgent, LlmRequestLogger};
+use crate::nearby::NearbyClient;
+use crate::services::aibus::{AiBus, AiBusHanders};
 use crate::storage::{MediaStore, MemoryRecord};
 use device::{DeviceApi, DeviceVersionSnapshot};
 
@@ -49,14 +52,14 @@ pub struct ApiState {
     pub config_path: PathBuf,
     /// Live config that can be updated at runtime.
     pub shared_config: Arc<RwLock<Config>>,
-    /// Hot-swappable LLM agent (shared with AiBusServiceImpl).
-    pub shared_agent: Arc<RwLock<Arc<LlmAgent>>>,
+    /// Hot-swappable AiBus service root.
+    pub aibus: AiBus,
+    /// Dedup cache handle for invalidating stale gRPC responses after config swaps.
+    pub dedup: DedupHandle,
     /// Always-on LLM request/response logger.
     pub llm_request_logger: LlmRequestLogger,
     /// Shared HTTP client for outbound requests.
     pub http_client: HttpClient,
-    /// Hot-swappable weather API key (shared with AiBusServiceImpl).
-    pub shared_weather_key: Arc<RwLock<Option<String>>>,
     /// Directory where rolling log files are written, if file logging is enabled.
     pub log_dir: Option<PathBuf>,
     /// File-name prefix for rolling log files.
@@ -762,23 +765,20 @@ async fn update_settings(
         }
     }
 
-    // Take a write lock on the shared config and apply changes.
+    // Take a write lock on the source config and apply changes.
     let mut config = state.shared_config.write().await;
-
-    let mut llm_changed = false;
+    let original_config = config.clone();
 
     // --- LLM changes ---
     if let Some(ref llm) = body.llm {
         if let Some(provider) = llm.provider {
             if provider != config.llm.provider {
                 config.llm.provider = provider;
-                llm_changed = true;
             }
         }
         if let Some(ref model) = llm.model {
             if *model != config.llm.model {
                 config.llm.model = model.clone();
-                llm_changed = true;
             }
         }
         if let Some(ref api_key) = llm.api_key {
@@ -787,7 +787,6 @@ async fn update_settings(
             } else {
                 Some(api_key.clone())
             };
-            llm_changed = true;
         }
         if let Some(ref base_url) = llm.base_url {
             let new_val = if base_url.is_empty() {
@@ -797,38 +796,32 @@ async fn update_settings(
             };
             if new_val != config.llm.base_url {
                 config.llm.base_url = new_val;
-                llm_changed = true;
             }
         }
         if let Some(v) = llm.gemini_google_search {
             if v != config.llm.gemini_google_search {
                 config.llm.gemini_google_search = v;
-                llm_changed = true;
             }
         }
         if let Some(ref tools) = llm.tools {
             if let Some(enabled) = tools.enabled {
                 if enabled != config.llm.tools.enabled {
                     config.llm.tools.enabled = enabled;
-                    llm_changed = true;
                 }
             }
             if let Some(dynamic_tool_count) = tools.dynamic_tool_count {
                 if dynamic_tool_count != config.llm.tools.dynamic_tool_count {
                     config.llm.tools.dynamic_tool_count = dynamic_tool_count;
-                    llm_changed = true;
                 }
             }
             if let Some(max_tool_turns) = tools.max_tool_turns {
                 if max_tool_turns != config.llm.tools.max_tool_turns {
                     config.llm.tools.max_tool_turns = max_tool_turns;
-                    llm_changed = true;
                 }
             }
             if let Some(tool_concurrency) = tools.tool_concurrency {
                 if tool_concurrency != config.llm.tools.tool_concurrency {
                     config.llm.tools.tool_concurrency = tool_concurrency;
-                    llm_changed = true;
                 }
             }
         }
@@ -857,7 +850,6 @@ async fn update_settings(
     }
 
     // --- Weather changes ---
-    let mut weather_key_changed = false;
     if let Some(ref weather) = body.weather {
         if let Some(ref key) = weather.pirate_weather_api_key {
             let new_val = if key.is_empty() {
@@ -867,7 +859,6 @@ async fn update_settings(
             };
             if new_val != config.weather.pirate_weather_api_key {
                 config.weather.pirate_weather_api_key = new_val;
-                weather_key_changed = true;
             }
         }
     }
@@ -889,47 +880,44 @@ async fn update_settings(
         }
     }
 
-    // --- Validate: try building a new LLM agent before committing ---
-    if llm_changed {
-        let agent_result = LlmAgent::from_config(
-            &config.llm,
-            state.http_client.clone(),
-            state.llm_request_logger.clone(),
-        )
-        .await
-        .map_err(|e| e.to_string());
+    let new_resolved = Arc::new(ResolvedConfig::resolve(config.clone()));
 
-        match agent_result {
-            Ok(new_agent) => {
-                // Swap the agent
-                let mut agent_guard = state.shared_agent.write().await;
-                *agent_guard = Arc::new(new_agent);
-                info!(
-                    "hot-reloaded LLM agent (provider={}, model={})",
-                    config.llm.provider, config.llm.model
-                );
-            }
-            Err(e) => {
-                // Rollback config changes: reload the effective config since we already mutated in-place.
-                warn!(error = %e, "failed to build LLM agent with new settings, rolling back");
-                if let Ok(restored) = Config::load(&state.config_path) {
-                    *config = restored;
-                }
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid LLM configuration: {e}"),
-                )
-                    .into_response();
-            }
+    // --- Validate: build a new LLM/AiBus tree before committing ---
+    let agent_result = LlmAgent::from_config(
+        &new_resolved,
+        state.http_client.clone(),
+        state.llm_request_logger.clone(),
+    )
+    .await
+    .map_err(|e| e.to_string());
+
+    match agent_result {
+        Ok(new_agent) => {
+            let agent = Arc::new(new_agent);
+            let new_aibus = Arc::new(AiBusHanders::new(
+                agent,
+                new_resolved.clone(),
+                NearbyClient::new(state.http_client.clone()),
+                state.http_client.clone(),
+                state.db.clone(),
+            ));
+            state.aibus.replace(new_aibus).await;
+            state.dedup.clear().await;
+            info!(
+                provider = %config.llm.provider,
+                model = %config.llm.model,
+                "hot-reloaded AiBus service"
+            );
         }
-    }
-
-    // --- Hot-reload weather key ---
-    if weather_key_changed {
-        let resolved = config.weather.resolve_api_key();
-        let mut key_guard = state.shared_weather_key.write().await;
-        *key_guard = resolved;
-        info!("hot-reloaded weather API key");
+        Err(e) => {
+            warn!(error = %e, "failed to build AiBus service with new settings, rolling back");
+            *config = original_config;
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("invalid LLM configuration: {e}"),
+            )
+                .into_response();
+        }
     }
 
     // --- Persist to disk via toml_edit (format-preserving) ---

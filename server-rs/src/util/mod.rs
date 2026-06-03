@@ -1,3 +1,5 @@
+pub mod serde;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn now_unix_millis() -> i64 {

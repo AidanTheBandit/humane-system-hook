@@ -3,7 +3,7 @@ use std::sync::Arc;
 use reqwest::Client as HttpClient;
 use tracing::info;
 
-use crate::config::LlmConfig;
+use crate::config::ResolvedConfig;
 
 use super::backend::LlmBackend;
 use super::providers;
@@ -18,12 +18,12 @@ pub struct LlmAgent {
 impl LlmAgent {
     /// Build an `LlmAgent` from the loaded config.
     pub async fn from_config(
-        config: &LlmConfig,
+        config: &ResolvedConfig,
         http_client: HttpClient,
         request_logger: LlmRequestLogger,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let provider = config.provider;
-        info!(provider = %provider, model = %config.model, "constructing LLM agent");
+        let provider = config.config.llm.provider;
+        info!(provider = %provider, model = %config.config.llm.model, "constructing LLM agent");
 
         let backend = providers::build_backend(config, http_client, request_logger).await?;
 

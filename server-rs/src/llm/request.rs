@@ -1,7 +1,7 @@
 use rig::completion::message::Message;
 use serde::Serialize;
 
-use crate::config::Config;
+use crate::config::ResolvedConfig;
 
 #[derive(Clone, Debug)]
 pub struct PromptTemplates {
@@ -26,15 +26,19 @@ pub struct PromptTemplateContext {
 }
 
 impl PromptTemplateContext {
-    pub fn new(run_id: &str, config: &Config, datetime: chrono::DateTime<chrono::Local>) -> Self {
+    pub fn new(
+        run_id: &str,
+        config: &ResolvedConfig,
+        datetime: chrono::DateTime<chrono::Local>,
+    ) -> Self {
         let current_timestamp = datetime.to_rfc3339();
         let current_date = datetime.format("%Y-%m-%d").to_string();
         let current_time = datetime.format("%H:%M:%S %z").to_string();
 
         Self {
             run_id: run_id.to_string(),
-            assistant_display_name: config.server.display_name.clone(),
-            server_public_addr: config.server.public_addr.clone(),
+            assistant_display_name: config.config.server.display_name.clone(),
+            server_public_addr: config.config.server.public_addr.clone(),
 
             current_timestamp,
             current_date,

@@ -7,21 +7,26 @@ use rig::tool::ToolSet;
 use rig::vector_store::in_memory_store::{InMemoryVectorIndex, InMemoryVectorStore};
 use tracing::{info, warn};
 
-use crate::config::LlmConfig;
+use crate::config::{LlmConfig, ResolvedConfig};
+use crate::external::weather::WeatherClient;
 use crate::nearby::NearbyClient;
 
 use super::fastembed;
 use super::nearby_search::NearbySearchTool;
+use super::weather::WeatherTool;
 
 #[derive(Clone)]
 pub struct LlmToolContext {
     pub nearby_client: Arc<NearbyClient>,
+    pub weather: WeatherClient,
 }
 
 impl LlmToolContext {
-    pub fn new(http_client: reqwest::Client) -> Self {
-        let nearby_client = Arc::new(NearbyClient::new(http_client));
-        Self { nearby_client }
+    pub fn new(http_client: reqwest::Client, config: &ResolvedConfig) -> Self {
+        Self {
+            nearby_client: Arc::new(NearbyClient::new(http_client.clone())),
+            weather: WeatherClient::new(http_client, config.pirate_weather_api_key.clone()),
+        }
     }
 
     pub async fn build_tool_resources(
@@ -42,9 +47,16 @@ impl LlmToolContext {
             return Ok(None);
         }
 
-        let toolset = ToolSet::builder()
-            .dynamic_tool(NearbySearchTool::new(self.nearby_client.clone()))
-            .build();
+        let builder =
+            ToolSet::builder().dynamic_tool(NearbySearchTool::new(self.nearby_client.clone()));
+
+        let builder = if self.weather.is_configured() {
+            builder.dynamic_tool(WeatherTool::new(self.weather.clone()))
+        } else {
+            builder
+        };
+
+        let toolset = builder.build();
 
         let schemas = toolset.schemas().map_err(|err| err.to_string())?;
         if schemas.is_empty() {
