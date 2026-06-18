@@ -2,7 +2,9 @@ package com.penumbraos.hook
 
 import android.app.Application
 import android.content.Context
+import android.os.Binder
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
@@ -34,8 +36,10 @@ object HandTrackingTimeoutHooks {
     private const val REASON_CLASS = "humaneinternal.system.coordination.HandTrackingManager\$Reason"
     private const val MAIN_APPLICATION_CLASS = "humaneinternal.system.MainApplication"
     private const val HAND_TRACKING_SERVICE_CLASS = "humaneinternal.system.coordination.HandTrackingService"
+    private const val SYSTEM_MODE_STUB_CLASS = "humane.sysmode.ISystemModeService\$Stub"
+    private const val SYSTEM_MODE_SERVICE_NAME = "humane.service.SystemModeService"
+    private const val NARRATION_HATS_LOCK_REASON = "PenumbraNarration"
     private const val FLAT_HAND_CALLBACK_CLASS = "humaneinternal.system.hats.FlatHandService\$FlatHandCallback"
-    private const val PROJECTABLE_POSITION_CLASS = "humane.handtracking.ProjectableFlatHandPosition"
     private const val ARBITRATOR_CLASS = "humaneinternal.system.tao.Arbitrator"
 
     private const val DEFAULT_TIMEOUT_MS = 10_000L
@@ -62,6 +66,12 @@ object HandTrackingTimeoutHooks {
     private var managerRef: Any? = null
 
     @Volatile
+    private var narrationHatsToken: IBinder? = null
+
+    @Volatile
+    private var systemModeServiceRef: Any? = null
+
+    @Volatile
     private var appContext: Context? = null
 
     @Volatile
@@ -84,6 +94,7 @@ object HandTrackingTimeoutHooks {
     private lateinit var lastPendingTimeoutField: Field
     private lateinit var isHandTrackingRunningField: Field
     private lateinit var handTrackingServiceClass: Class<*>
+    private lateinit var systemModeStubClass: Class<*>
 
     fun install(cl: ClassLoader) {
         if (installed) return
@@ -117,6 +128,7 @@ object HandTrackingTimeoutHooks {
         lastPendingTimeoutField = managerClass.getDeclaredField("mLastPendingTimeout").apply { isAccessible = true }
         isHandTrackingRunningField = managerClass.getDeclaredField("mIsHandTrackingRunning").apply { isAccessible = true }
         handTrackingServiceClass = cl.loadClass(HAND_TRACKING_SERVICE_CLASS)
+        systemModeStubClass = cl.loadClass(SYSTEM_MODE_STUB_CLASS)
     }
 
     private fun hookApplicationContext(cl: ClassLoader) {
@@ -185,15 +197,6 @@ object HandTrackingTimeoutHooks {
         hookProjectionMethod(callbackClass, "onFlatHandProjectionLost", emptyArray()) {
             handleProjectionLost()
         }
-
-        try {
-            val projectablePositionClass = cl.loadClass(PROJECTABLE_POSITION_CLASS)
-            hookProjectionMethod(callbackClass, "onProjectableFlatHandDetected", arrayOf(projectablePositionClass)) {
-                handleProjectionRefresh()
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "  Projectable projection refresh hook unavailable: ${t.message}")
-        }
     }
 
     private fun hookArbitratorActiveResponse(cl: ClassLoader) {
@@ -219,7 +222,9 @@ object HandTrackingTimeoutHooks {
                     aiResponseActive = true
                     if (!wasHeld) {
                         cancelTimer(manager)
-                        Log.w(TAG, "  Hand tracking timeout held for active AI response")
+                        logState("Hand tracking timeout held for active AI response")
+                    } else {
+                        logState("Active AI response observed while hand tracking already held")
                     }
                 }
             })
@@ -234,10 +239,20 @@ object HandTrackingTimeoutHooks {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val manager = managerForActiveSession() ?: return
                     aiResponseActive = false
-                    narrationActive = false
-                    if (!projectionActive) {
-                        scheduleTimeout(manager, "interactive_session_clear")
+
+                    if (narrationActive) {
+                        cancelTimer(manager)
+                        logState("Interactive session cleared while narration active; preserving narration hold")
+                        return
                     }
+
+                    if (projectionActive) {
+                        cancelTimer(manager)
+                        logState("Interactive session cleared while projection active; preserving projection hold")
+                        return
+                    }
+
+                    scheduleTimeout(manager, "interactive_session_clear")
                 }
             })
             Log.w(TAG, "  Hooked Arbitrator.clearInteractiveSession()")
@@ -275,42 +290,66 @@ object HandTrackingTimeoutHooks {
 
         when (reason) {
             "TOUCHPAD" -> {
+                releaseNarrationHatsLock("new_touchpad")
                 sessionArmed = true
                 aiResponseActive = false
                 narrationActive = false
                 projectionActive = false
+                logState("TOUCHPAD armed hand tracking session")
                 startIfNeededMethod.invoke(manager)
                 scheduleTimeout(manager, "touchpad")
             }
 
             "NARRATION_START" -> {
-                if (!sessionArmed) return
-                aiResponseActive = true
+                if (!sessionArmed) {
+                    logState("NARRATION_START ignored because no active hand tracking session")
+                    return
+                }
                 narrationActive = true
+                startIfNeededMethod.invoke(manager)
+                acquireNarrationHatsLock("narration_start")
                 cancelTimer(manager)
-                Log.w(TAG, "  Hand tracking timeout held for narration")
+                logState("Hand tracking timeout held for narration")
             }
 
             "NARRATION_END" -> {
-                if (!sessionArmed) return
+                if (!sessionArmed) {
+                    logState("NARRATION_END ignored because no active hand tracking session")
+                    return
+                }
+                releaseNarrationHatsLock("narration_end")
                 aiResponseActive = false
                 narrationActive = false
-                scheduleTimeout(manager, "narration_end")
-            }
-
-            "LASER_START" -> {
-                if (!sessionArmed) return
-                projectionActive = true
-                if (!isActiveHold()) {
-                    scheduleTimeout(manager, "projection_start")
+                ensureActualHandTrackingRunning(manager, "narration_end")
+                if (projectionActive) {
+                    cancelTimer(manager)
+                    logState("NARRATION_END released narration hold; preserving active projection hold")
+                } else {
+                    logState("NARRATION_END released narration hold")
+                    scheduleTimeout(manager, "narration_end")
                 }
             }
 
+            "LASER_START" -> {
+                if (!sessionArmed) {
+                    logState("LASER_START ignored because no active hand tracking session")
+                    return
+                }
+                projectionActive = true
+                startIfNeededMethod.invoke(manager)
+                cancelTimer(manager)
+                logState("Projection hold started from LASER_START")
+            }
+
             "LASER_END" -> {
-                if (!sessionArmed) return
+                if (!sessionArmed) {
+                    logState("LASER_END ignored because no active hand tracking session")
+                    return
+                }
                 projectionActive = false
+                logState("Projection hold ended from LASER_END")
                 if (!isActiveHold()) {
-                    scheduleTimeout(manager, "projection_lost")
+                    scheduleTimeout(manager, "laser_end")
                 }
             }
 
@@ -342,28 +381,11 @@ object HandTrackingTimeoutHooks {
     }
 
     private fun handleProjectionStart() {
-        val manager = managerForActiveSession() ?: return
-        projectionActive = true
-        clearTimerExceptions(manager)
-        if (!isActiveHold()) {
-            scheduleTimeout(manager, "projection_callback_start")
-        }
-    }
-
-    private fun handleProjectionRefresh() {
-        val manager = managerForActiveSession() ?: return
-        if (!projectionActive || isActiveHold()) return
-        clearTimerExceptions(manager)
-        scheduleTimeout(manager, "projection_callback_refresh")
+        logState("Raw projection start callback")
     }
 
     private fun handleProjectionLost() {
-        val manager = managerForActiveSession() ?: return
-        projectionActive = false
-        clearTimerExceptions(manager)
-        if (!isActiveHold()) {
-            scheduleTimeout(manager, "projection_callback_lost")
-        }
+        logState("Raw projection lost callback")
     }
 
     private fun managerForActiveSession(): Any? {
@@ -384,19 +406,28 @@ object HandTrackingTimeoutHooks {
         val generation = ++timerGeneration
         val targetManager = manager
         timerHandler.postDelayed({
-            if (generation != timerGeneration || !sessionArmed || isActiveHold()) {
+            if (generation != timerGeneration) {
+                logState("Ignoring stale hand tracking timeout ($reason, generation=$generation)")
+                return@postDelayed
+            }
+            if (!sessionArmed) {
+                logState("Ignoring hand tracking timeout because session is no longer armed ($reason)")
+                return@postDelayed
+            }
+            if (isActiveHold()) {
+                logState("Ignoring hand tracking timeout because hold is active ($reason)")
                 return@postDelayed
             }
             try {
                 clearTimerExceptions(targetManager)
-                Log.w(TAG, "  Hand tracking timeout elapsed; stopping session ($reason)")
+                logState("Hand tracking timeout elapsed; stopping session ($reason)")
                 stopMethod.invoke(targetManager)
             } catch (t: Throwable) {
                 Log.e(TAG, "  Failed to stop hand tracking on timeout", t)
             }
         }, timeoutMs)
 
-        Log.w(TAG, "  Scheduled hand tracking stop in ${timeoutMs}ms ($reason)")
+        logState("Scheduled hand tracking stop in ${timeoutMs}ms ($reason, generation=$generation)")
     }
 
     private fun cancelTimer(manager: Any) {
@@ -405,6 +436,7 @@ object HandTrackingTimeoutHooks {
         runCatching { cancelTimerMethod.invoke(manager) }
             .onFailure { Log.w(TAG, "  Failed to cancel Humane hand tracking timer: ${it.message}") }
         runCatching { lastPendingTimeoutField.set(manager, null) }
+        logState("Cancelled hand tracking timeout")
     }
 
     private fun clearTimerExceptions(manager: Any) {
@@ -419,6 +451,81 @@ object HandTrackingTimeoutHooks {
         }.onFailure {
             Log.w(TAG, "  Failed to clear hand tracking timer exceptions: ${it.message}")
         }
+    }
+
+    private fun acquireNarrationHatsLock(reason: String) {
+        if (!sessionArmed) return
+        if (narrationHatsToken != null) {
+            Log.w(TAG, "Narration HATSLock already held ($reason)")
+            return
+        }
+
+        val service = systemModeService() ?: run {
+            Log.w(TAG, "SystemModeService unavailable; cannot acquire narration HATSLock ($reason)")
+            return
+        }
+        val token = Binder()
+        runCatching {
+            val method = service.javaClass.getMethod("acquireHATSLock", IBinder::class.java, String::class.java)
+            method.invoke(service, token, NARRATION_HATS_LOCK_REASON)
+            narrationHatsToken = token
+            Log.w(TAG, "Acquired narration HATSLock ($reason, token=$token)")
+        }.onFailure {
+            Log.w(TAG, "Failed to acquire narration HATSLock ($reason): ${it.message}")
+        }
+    }
+
+    private fun releaseNarrationHatsLock(reason: String) {
+        val token = narrationHatsToken ?: return
+        narrationHatsToken = null
+
+        val service = systemModeService() ?: run {
+            Log.w(TAG, "SystemModeService unavailable; dropped narration HATSLock token locally ($reason, token=$token)")
+            return
+        }
+        runCatching {
+            val method = service.javaClass.getMethod("releaseHATSLock", IBinder::class.java)
+            method.invoke(service, token)
+            Log.w(TAG, "Released narration HATSLock ($reason, token=$token)")
+        }.onFailure {
+            Log.w(TAG, "Failed to release narration HATSLock ($reason, token=$token): ${it.message}")
+        }
+    }
+
+    private fun systemModeService(): Any? {
+        systemModeServiceRef?.let { return it }
+        return runCatching {
+            val serviceManagerClass = Class.forName("android.os.ServiceManager")
+            val getServiceMethod = serviceManagerClass.getMethod("getService", String::class.java)
+            val binder = getServiceMethod.invoke(null, SYSTEM_MODE_SERVICE_NAME) as? IBinder ?: return null
+            val asInterfaceMethod = systemModeStubClass.getMethod("asInterface", IBinder::class.java)
+            asInterfaceMethod.invoke(null, binder)?.also { systemModeServiceRef = it }
+        }.onFailure {
+            Log.w(TAG, "Failed to bind SystemModeService for narration HATSLock: ${it.message}")
+        }.getOrNull()
+    }
+
+    private fun ensureActualHandTrackingRunning(manager: Any, reason: String): Boolean {
+        ensureRuntimeInitialized(manager)
+        return runCatching {
+            val service = handTrackingServiceClass.getDeclaredMethod("sharedInstance").invoke(null)
+            val isValid = handTrackingServiceClass.getDeclaredMethod("isValid").invoke(service) as? Boolean ?: false
+            if (!isValid) {
+                Log.w(TAG, "Actual hand tracking service invalid during revalidation ($reason)")
+                return false
+            }
+
+            val isRunning = handTrackingServiceClass.getDeclaredMethod("isRunning").invoke(service) as? Boolean ?: false
+            Log.w(TAG, "Revalidated actual hand tracking ($reason): running=$isRunning")
+            if (!isRunning) {
+                handTrackingServiceClass.getDeclaredMethod("start").invoke(service)
+                isHandTrackingRunningField.setBoolean(manager, true)
+                Log.w(TAG, "Restarted actual hand tracking for active session ($reason)")
+            }
+            true
+        }.onFailure {
+            Log.w(TAG, "Failed to revalidate actual hand tracking ($reason): ${it.message}")
+        }.getOrDefault(false)
     }
 
     private fun isActiveHold(): Boolean {
@@ -476,7 +583,16 @@ object HandTrackingTimeoutHooks {
         }.getOrDefault(false)
     }
 
+    private fun logState(message: String) {
+        Log.w(
+            TAG,
+            "$message | sessionArmed=$sessionArmed aiResponseActive=$aiResponseActive " +
+                "narrationActive=$narrationActive projectionActive=$projectionActive generation=$timerGeneration",
+        )
+    }
+
     private fun resetHookState() {
+        releaseNarrationHatsLock("reset_hook_state")
         sessionArmed = false
         aiResponseActive = false
         narrationActive = false
