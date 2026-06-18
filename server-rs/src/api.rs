@@ -9,12 +9,12 @@ mod dev;
 pub mod device;
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use axum::extract::{Path, State};
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, put};
 use axum::{Json, Router};
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
-use crate::config::{Config, LlmProvider, ResolvedConfig};
+use crate::config::{Config, LlmProvider, ResolvedConfig, ServerConfig};
 use crate::db::Database;
 use crate::dedup::DedupHandle;
 use crate::esim::{
@@ -31,7 +31,7 @@ use crate::esim::{
     EsimSnapshot,
 };
 use crate::llm::memory::MemoryService;
-use crate::llm::{validate_prompt_template, LlmAgent, LlmRequestLogger};
+use crate::llm::{LlmAgent, LlmRequestLogger, validate_prompt_template};
 use crate::nearby::NearbyClient;
 use crate::services::aibus::{AiBus, AiBusHanders};
 use crate::storage::{MediaStore, MemoryRecord};
@@ -328,8 +328,8 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
             http_bind_addr: config.server.http_bind_addr.clone(),
             grpc_bind_addr: config.server.grpc_bind_addr.clone(),
             public_addr: config.server.public_addr.clone(),
-            system_prompt: config.server.system_prompt.clone(),
-            status_prompt: config.server.status_prompt.clone(),
+            system_prompt: config.server.resolved_system_prompt(),
+            status_prompt: config.server.resolved_status_prompt(),
             display_name: config.server.display_name.clone(),
         },
         storage: StorageSettingsResponse {
@@ -721,9 +721,39 @@ struct UpdateServerSettings {
     grpc_bind_addr: Option<serde_json::Value>,
     /// Read-only — rejected if present.
     public_addr: Option<serde_json::Value>,
-    system_prompt: Option<String>,
-    status_prompt: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_prompt_update")]
+    system_prompt: PromptUpdate,
+    #[serde(default, deserialize_with = "deserialize_prompt_update")]
+    status_prompt: PromptUpdate,
     display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromptUpdate {
+    Unchanged,
+    Clear,
+    Set(String),
+}
+
+impl Default for PromptUpdate {
+    fn default() -> Self {
+        Self::Unchanged
+    }
+}
+
+fn deserialize_prompt_update<'de, D>(deserializer: D) -> Result<PromptUpdate, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    match value {
+        None => Ok(PromptUpdate::Clear),
+        Some(prompt) if prompt.is_empty() => Ok(PromptUpdate::Clear),
+        Some(prompt) if prompt.trim().is_empty() => {
+            Err(serde::de::Error::custom("prompt cannot be whitespace-only"))
+        }
+        Some(prompt) => Ok(PromptUpdate::Set(prompt.trim().to_string())),
+    }
 }
 
 #[derive(Deserialize)]
@@ -779,7 +809,7 @@ async fn update_settings(
     }
 
     if let Some(ref server) = body.server {
-        if let Some(ref system_prompt) = server.system_prompt {
+        if let PromptUpdate::Set(system_prompt) = &server.system_prompt {
             if let Err(error) = validate_prompt_template("server.system_prompt", system_prompt) {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -788,7 +818,7 @@ async fn update_settings(
                     .into_response();
             }
         }
-        if let Some(ref status_prompt) = server.status_prompt {
+        if let PromptUpdate::Set(status_prompt) = &server.status_prompt {
             if let Err(error) = validate_prompt_template("server.status_prompt", status_prompt) {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -894,14 +924,46 @@ async fn update_settings(
 
     // --- Server changes ---
     if let Some(ref server) = body.server {
-        if let Some(ref system_prompt) = server.system_prompt {
-            if *system_prompt != config.server.system_prompt {
-                config.server.system_prompt = system_prompt.clone();
+        match &server.system_prompt {
+            PromptUpdate::Unchanged => {}
+            PromptUpdate::Clear => {
+                if config.server.system_prompt.is_some() {
+                    config.server.system_prompt = None;
+                }
+            }
+            PromptUpdate::Set(system_prompt) => {
+                match ServerConfig::configured_system_prompt(system_prompt.clone()) {
+                    Ok(new_val) => {
+                        if new_val != config.server.system_prompt {
+                            config.server.system_prompt = new_val;
+                        }
+                    }
+                    Err(error) => {
+                        *config = original_config;
+                        return (StatusCode::BAD_REQUEST, error).into_response();
+                    }
+                }
             }
         }
-        if let Some(ref status_prompt) = server.status_prompt {
-            if *status_prompt != config.server.status_prompt {
-                config.server.status_prompt = status_prompt.clone();
+        match &server.status_prompt {
+            PromptUpdate::Unchanged => {}
+            PromptUpdate::Clear => {
+                if config.server.status_prompt.is_some() {
+                    config.server.status_prompt = None;
+                }
+            }
+            PromptUpdate::Set(status_prompt) => {
+                match ServerConfig::configured_status_prompt(status_prompt.clone()) {
+                    Ok(new_val) => {
+                        if new_val != config.server.status_prompt {
+                            config.server.status_prompt = new_val;
+                        }
+                    }
+                    Err(error) => {
+                        *config = original_config;
+                        return (StatusCode::BAD_REQUEST, error).into_response();
+                    }
+                }
             }
         }
         if let Some(ref display_name) = server.display_name {
@@ -1039,8 +1101,8 @@ async fn update_settings(
             http_bind_addr: config.server.http_bind_addr.clone(),
             grpc_bind_addr: config.server.grpc_bind_addr.clone(),
             public_addr: config.server.public_addr.clone(),
-            system_prompt: config.server.system_prompt.clone(),
-            status_prompt: config.server.status_prompt.clone(),
+            system_prompt: config.server.resolved_system_prompt(),
+            status_prompt: config.server.resolved_status_prompt(),
             display_name: config.server.display_name.clone(),
         },
         storage: StorageSettingsResponse {
@@ -1166,8 +1228,22 @@ fn persist_config_inner(
         table["http_bind_addr"] = toml_edit::value(&config.server.http_bind_addr);
         table["grpc_bind_addr"] = toml_edit::value(&config.server.grpc_bind_addr);
         table["public_addr"] = toml_edit::value(&config.server.public_addr);
-        table["system_prompt"] = toml_edit::value(&config.server.system_prompt);
-        table["status_prompt"] = toml_edit::value(&config.server.status_prompt);
+        match &config.server.system_prompt {
+            Some(system_prompt) => table["system_prompt"] = toml_edit::value(system_prompt),
+            None => {
+                if let Some(t) = table.as_table_mut() {
+                    t.remove("system_prompt");
+                }
+            }
+        }
+        match &config.server.status_prompt {
+            Some(status_prompt) => table["status_prompt"] = toml_edit::value(status_prompt),
+            None => {
+                if let Some(t) = table.as_table_mut() {
+                    t.remove("status_prompt");
+                }
+            }
+        }
         match &config.server.display_name {
             Some(name) => table["display_name"] = toml_edit::value(name),
             None => {
@@ -1471,4 +1547,48 @@ async fn get_logcat_logs(axum::extract::Query(_query): axum::extract::Query<LogQ
         "logcat is only available on Android",
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Deserialize)]
+    struct PromptUpdateFixture {
+        #[serde(default, deserialize_with = "deserialize_prompt_update")]
+        prompt: PromptUpdate,
+    }
+
+    #[test]
+    fn prompt_update_missing_is_unchanged() {
+        let fixture: PromptUpdateFixture = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(fixture.prompt, PromptUpdate::Unchanged);
+    }
+
+    #[test]
+    fn prompt_update_null_clears() {
+        let fixture: PromptUpdateFixture = serde_json::from_str(r#"{"prompt":null}"#).unwrap();
+        assert_eq!(fixture.prompt, PromptUpdate::Clear);
+    }
+
+    #[test]
+    fn prompt_update_empty_string_clears() {
+        let fixture: PromptUpdateFixture = serde_json::from_str(r#"{"prompt":""}"#).unwrap();
+        assert_eq!(fixture.prompt, PromptUpdate::Clear);
+    }
+
+    #[test]
+    fn prompt_update_string_sets_trimmed_custom_prompt() {
+        let fixture: PromptUpdateFixture =
+            serde_json::from_str(r#"{"prompt":"  Custom prompt  "}"#).unwrap();
+        assert_eq!(fixture.prompt, PromptUpdate::Set("Custom prompt".into()));
+    }
+
+    #[test]
+    fn prompt_update_whitespace_string_is_rejected() {
+        let error = serde_json::from_str::<PromptUpdateFixture>(r#"{"prompt":"   "}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("prompt cannot be whitespace-only"));
+    }
 }

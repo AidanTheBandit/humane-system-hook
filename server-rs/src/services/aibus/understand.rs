@@ -13,8 +13,8 @@ use std::sync::Arc;
 use super::envelope::unwrap_plaintext_data;
 use crate::config::ResolvedConfig;
 use crate::db::Database;
-use crate::llm::memory::MemoryService;
 use crate::llm::ChatResult;
+use crate::llm::memory::MemoryService;
 use crate::llm::{LlmAgent, LlmChatRequest, PromptTemplateContext, PromptTemplates};
 use crate::proto::aibus::*;
 use crate::proto::common::encryption::{self, EncryptedData};
@@ -120,8 +120,8 @@ impl UnderstandHandler {
         let does_have_image = image.is_some();
 
         let templates = PromptTemplates {
-            system_prompt: self.config.config.server.system_prompt.clone(),
-            status_prompt: self.config.config.server.status_prompt.clone(),
+            system_prompt: self.config.config.server.resolved_system_prompt(),
+            status_prompt: self.config.config.server.resolved_status_prompt(),
         };
 
         let template_context = self.build_prompt_template_context(req, run_id, &self.config);

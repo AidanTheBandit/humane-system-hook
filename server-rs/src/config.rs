@@ -164,12 +164,18 @@ pub struct ServerConfig {
     pub public_addr: String,
 
     /// System prompt template sent to the LLM.
-    #[serde(default = "default_system_prompt")]
-    pub system_prompt: String,
+    ///
+    /// `None` means use the current built-in default prompt. A concrete value
+    /// is treated as user-customized and must not be empty.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
 
     /// Request status prompt template sent to the LLM after app-provided history.
-    #[serde(default = "default_status_prompt")]
-    pub status_prompt: String,
+    ///
+    /// `None` means use the current built-in default prompt. A concrete value
+    /// is treated as user-customized and must not be empty.
+    #[serde(default)]
+    pub status_prompt: Option<String>,
 
     /// Display name shown during onboarding welcome screen.
     pub display_name: Option<String>,
@@ -373,8 +379,8 @@ impl Default for ServerConfig {
             http_bind_addr: default_http_bind_addr(),
             grpc_bind_addr: default_grpc_bind_addr(),
             public_addr: default_public_addr(),
-            system_prompt: default_system_prompt(),
-            status_prompt: default_status_prompt(),
+            system_prompt: None,
+            status_prompt: None,
             display_name: None,
         }
     }
@@ -420,7 +426,8 @@ impl Config {
             info!(path = ?local_path, base_path = ?path, "loaded local config override");
         }
 
-        let config: Config = config_value.try_into()?;
+        let mut config: Config = config_value.try_into()?;
+        config.server.normalize()?;
 
         #[cfg(target_os = "android")]
         {
@@ -475,6 +482,57 @@ fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
             *base_value = overlay_value;
         }
     }
+}
+
+impl ServerConfig {
+    /// Resolve the configured system prompt, falling back to the current built-in default.
+    pub fn resolved_system_prompt(&self) -> String {
+        self.system_prompt
+            .clone()
+            .unwrap_or_else(default_system_prompt)
+    }
+
+    /// Resolve the configured status prompt, falling back to the current built-in default.
+    pub fn resolved_status_prompt(&self) -> String {
+        self.status_prompt
+            .clone()
+            .unwrap_or_else(default_status_prompt)
+    }
+
+    pub fn configured_system_prompt(value: String) -> Result<Option<String>, String> {
+        normalize_configured_prompt("server.system_prompt", value, default_system_prompt())
+    }
+
+    pub fn configured_status_prompt(value: String) -> Result<Option<String>, String> {
+        normalize_configured_prompt("server.status_prompt", value, default_status_prompt())
+    }
+
+    fn normalize(&mut self) -> Result<(), String> {
+        if let Some(system_prompt) = self.system_prompt.take() {
+            self.system_prompt = Self::configured_system_prompt(system_prompt)?;
+        }
+        if let Some(status_prompt) = self.status_prompt.take() {
+            self.status_prompt = Self::configured_status_prompt(status_prompt)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn normalize_configured_prompt(
+    field: &str,
+    value: String,
+    default_value: String,
+) -> Result<Option<String>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field} cannot be empty"));
+    }
+    if trimmed == default_value.trim() {
+        return Ok(None);
+    }
+
+    Ok(Some(trimmed.to_string()))
 }
 
 impl LlmConfig {
@@ -532,7 +590,161 @@ mod tests {
         assert!(config.llm.memory.enabled);
         assert_eq!(config.llm.memory.path, default_memory_path());
         assert_eq!(config.server.http_bind_addr, default_http_bind_addr());
+        assert_eq!(config.server.system_prompt, None);
+        assert_eq!(
+            config.server.resolved_system_prompt(),
+            default_system_prompt()
+        );
+        assert_eq!(config.server.status_prompt, None);
+        assert_eq!(
+            config.server.resolved_status_prompt(),
+            default_status_prompt()
+        );
         assert_eq!(config.storage.media_dir, default_media_dir());
+    }
+
+    #[test]
+    fn omitted_system_prompt_tracks_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[server]
+public_addr = "192.0.2.10:8080"
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.server.system_prompt, None);
+        assert_eq!(
+            config.server.resolved_system_prompt(),
+            default_system_prompt()
+        );
+    }
+
+    #[test]
+    fn custom_system_prompt_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[server]
+system_prompt = "Custom prompt"
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.server.system_prompt, Some("Custom prompt".into()));
+        assert_eq!(config.server.resolved_system_prompt(), "Custom prompt");
+    }
+
+    #[test]
+    fn empty_system_prompt_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[server]
+system_prompt = "   "
+"#,
+        );
+
+        let error = Config::load(&path).unwrap_err().to_string();
+
+        assert!(error.contains("server.system_prompt cannot be empty"));
+    }
+
+    #[test]
+    fn custom_prompts_are_trimmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[server]
+system_prompt = "  Custom system prompt  "
+status_prompt = "  Custom status prompt  "
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(
+            config.server.system_prompt,
+            Some("Custom system prompt".into())
+        );
+        assert_eq!(
+            config.server.status_prompt,
+            Some("Custom status prompt".into())
+        );
+    }
+
+    #[test]
+    fn prompts_matching_defaults_are_deduped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            &format!(
+                r#"
+[server]
+system_prompt = "  {}  "
+status_prompt = """
+{}
+"""
+"#,
+                default_system_prompt(),
+                default_status_prompt()
+            ),
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.server.system_prompt, None);
+        assert_eq!(config.server.status_prompt, None);
+    }
+
+    #[test]
+    fn omitted_status_prompt_tracks_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[server]
+public_addr = "192.0.2.10:8080"
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.server.status_prompt, None);
+        assert_eq!(
+            config.server.resolved_status_prompt(),
+            default_status_prompt()
+        );
+    }
+
+    #[test]
+    fn empty_status_prompt_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[server]
+status_prompt = "   "
+"#,
+        );
+
+        let error = Config::load(&path).unwrap_err().to_string();
+
+        assert!(error.contains("server.status_prompt cannot be empty"));
     }
 
     #[test]

@@ -77,8 +77,8 @@ impl CompletionHandler {
                 prompt,
                 Vec::new(),
                 PromptTemplates {
-                    system_prompt: self.config.config.server.system_prompt.clone(),
-                    status_prompt: self.config.config.server.status_prompt.clone(),
+                    system_prompt: self.config.config.server.resolved_system_prompt(),
+                    status_prompt: self.config.config.server.resolved_status_prompt(),
                 },
                 PromptTemplateContext::new(
                     "encrypted-chat-completion",
@@ -144,8 +144,8 @@ impl CompletionHandler {
                 prompt,
                 Vec::new(),
                 PromptTemplates {
-                    system_prompt: self.config.config.server.system_prompt.clone(),
-                    status_prompt: self.config.config.server.status_prompt.clone(),
+                    system_prompt: self.config.config.server.resolved_system_prompt(),
+                    status_prompt: self.config.config.server.resolved_status_prompt(),
                 },
                 PromptTemplateContext::new(
                     "encrypted-completion",

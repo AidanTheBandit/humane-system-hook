@@ -19,6 +19,21 @@ object BootstrapConfig {
     private const val LOG_DIR_PLACEHOLDER = "__APP_LOG_DIR__"
     private const val MEMORY_PATH_PLACEHOLDER = "__APP_MEMORY_PATH__"
     private const val PERSISTENT_ROOT_DIR_NAME = "PenumbraOS"
+    private val LEGACY_DEFAULT_SYSTEM_PROMPT_LINES = listOf(
+        "system_prompt = \"You are a helpful assistant running on a Humane AI Pin. Keep responses concise - they will be displayed on a laser projector and spoken aloud.\"",
+    )
+    private val LEGACY_DEFAULT_STATUS_PROMPT_LINES = listOf(
+        "status_prompt = \"\"\"",
+        "Current request status:",
+        "- Current timestamp: {{current_timestamp}}",
+        "- Current date: {{current_date}}",
+        "- Current time: {{current_time}}",
+        "{{#if location_name}}- User location: {{location_name}}{{else}}- User location: unknown",
+        "{{/if}}{{#if coordinates}}- User coordinates: {{coordinates}}",
+        "{{/if}}",
+        "This status applies to the current user request only. If it conflicts with earlier conversation history, prefer this current status.",
+        "\"\"\"",
+    )
 
     fun ensurePersistentRoot(): File {
         val externalRoot = File(Environment.getExternalStorageDirectory(), PERSISTENT_ROOT_DIR_NAME)
@@ -64,7 +79,7 @@ object BootstrapConfig {
 
         if (configFile.exists()) {
             Log.w(TAG, "Using existing canonical config at ${configFile.absolutePath}")
-            applyAndroidManagedDefaults(
+            applyAndroidConfigMigrations(
                 configFile,
                 managedFields(mediaDir, dbFile, logDir, memoryFile),
             )
@@ -85,6 +100,8 @@ object BootstrapConfig {
 
     private data class ManagedField(val section: String, val key: String, val value: String)
 
+    private data class SectionBounds(val headerIdx: Int, val endIdx: Int)
+
     private fun managedFields(
         mediaDir: File,
         dbFile: File,
@@ -98,12 +115,15 @@ object BootstrapConfig {
     )
 
     /**
-     * Idempotent migration: ensures every Android-managed field exists in the
-     * given config file. Missing fields are inserted at the top of their
-     * section (creating the section if absent). Existing values are never
-     * overwritten
+     * Idempotent Android config migrations:
+     * - ensures every Android-managed field exists in the given config file;
+     * - removes legacy bootstrap prompt defaults when they exactly match the
+     *   generated built-in defaults, so uncustomized users keep following app
+     *   defaults.
+     *
+     * Existing custom values are never overwritten.
      */
-    private fun applyAndroidManagedDefaults(configFile: File, fields: List<ManagedField>) {
+    private fun applyAndroidConfigMigrations(configFile: File, fields: List<ManagedField>) {
         val original = try {
             configFile.readText()
         } catch (t: Throwable) {
@@ -113,17 +133,37 @@ object BootstrapConfig {
 
         var text = original
         val bySection = fields.groupBy { it.section }
-        var addedAny = false
+        var changedAny = false
+        var addedManagedDefaults = false
+        var removedLegacySystemPrompt = false
+        var removedLegacyStatusPrompt = false
 
         for ((section, items) in bySection) {
             val (newText, changed) = ensureFieldsInSection(text, section, items)
             if (changed) {
                 text = newText
-                addedAny = true
+                changedAny = true
+                addedManagedDefaults = true
             }
         }
 
-        if (!addedAny) return
+        val (textWithoutLegacySystemPrompt, removedSystemPrompt) =
+            removeLegacyDefaultPrompt(text, LEGACY_DEFAULT_SYSTEM_PROMPT_LINES)
+        if (removedSystemPrompt) {
+            text = textWithoutLegacySystemPrompt
+            changedAny = true
+            removedLegacySystemPrompt = true
+        }
+
+        val (textWithoutLegacyStatusPrompt, removedStatusPrompt) =
+            removeLegacyDefaultPrompt(text, LEGACY_DEFAULT_STATUS_PROMPT_LINES)
+        if (removedStatusPrompt) {
+            text = textWithoutLegacyStatusPrompt
+            changedAny = true
+            removedLegacyStatusPrompt = true
+        }
+
+        if (!changedAny) return
 
         try {
             val bak = File(configFile.parentFile, "${configFile.name}.bak")
@@ -131,7 +171,10 @@ object BootstrapConfig {
             configFile.writeText(text)
             Log.w(
                 TAG,
-                "Migrated ${configFile.absolutePath}: added missing Android-managed defaults",
+                "Migrated ${configFile.absolutePath}: " +
+                    "addedManagedDefaults=$addedManagedDefaults, " +
+                    "removedLegacySystemPrompt=$removedLegacySystemPrompt, " +
+                    "removedLegacyStatusPrompt=$removedLegacyStatusPrompt",
             )
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to persist migrated config", t)
@@ -148,12 +191,10 @@ object BootstrapConfig {
         section: String,
         items: List<ManagedField>,
     ): Pair<String, Boolean> {
-        val sectionHeader = "[$section]"
         val lines = text.lines().toMutableList()
+        val bounds = findSectionBounds(lines, section)
 
-        val headerIdx = lines.indexOfFirst { it.trim() == sectionHeader }
-
-        if (headerIdx == -1) {
+        if (bounds == null) {
             val sb = StringBuilder(text)
             if (text.isNotEmpty() && !text.endsWith("\n")) sb.append("\n")
             if (text.isNotEmpty() && !text.endsWith("\n\n")) sb.append("\n")
@@ -164,18 +205,8 @@ object BootstrapConfig {
             return sb.toString() to true
         }
 
-        // Scope of this section: until next [header] or EOF.
-        var endIdx = lines.size
-        for (i in headerIdx + 1 until lines.size) {
-            val t = lines[i].trim()
-            if (t.startsWith("[") && t.endsWith("]")) {
-                endIdx = i
-                break
-            }
-        }
-
         val presentKeys = mutableSetOf<String>()
-        for (i in headerIdx + 1 until endIdx) {
+        for (i in bounds.headerIdx + 1 until bounds.endIdx) {
             val t = lines[i].substringBefore('#').trim()
             if (t.isEmpty()) continue
             val eq = t.indexOf('=')
@@ -186,8 +217,46 @@ object BootstrapConfig {
         if (missing.isEmpty()) return text to false
 
         val toInsert = missing.map { """${it.key} = "${escapeToml(it.value)}"""" }
-        lines.addAll(headerIdx + 1, toInsert)
+        lines.addAll(bounds.headerIdx + 1, toInsert)
         return lines.joinToString("\n") to true
+    }
+
+    private fun removeLegacyDefaultPrompt(
+        text: String,
+        expectedLines: List<String>,
+    ): Pair<String, Boolean> {
+        val lines = text.lines().toMutableList()
+        val bounds = findSectionBounds(lines, "server") ?: return text to false
+        val lastStart = bounds.endIdx - expectedLines.size
+
+        if (lastStart < bounds.headerIdx + 1) return text to false
+
+        for (i in bounds.headerIdx + 1..lastStart) {
+            val candidate = lines.subList(i, i + expectedLines.size)
+            if (candidate.map { it.trim() } == expectedLines) {
+                repeat(expectedLines.size) { lines.removeAt(i) }
+                return lines.joinToString("\n") to true
+            }
+        }
+
+        return text to false
+    }
+
+    private fun findSectionBounds(lines: List<String>, section: String): SectionBounds? {
+        val sectionHeader = "[$section]"
+        val headerIdx = lines.indexOfFirst { it.trim() == sectionHeader }
+        if (headerIdx == -1) return null
+
+        var endIdx = lines.size
+        for (i in headerIdx + 1 until lines.size) {
+            val trimmed = lines[i].trim()
+            if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                endIdx = i
+                break
+            }
+        }
+
+        return SectionBounds(headerIdx, endIdx)
     }
 
     private fun escapeToml(value: String): String =
