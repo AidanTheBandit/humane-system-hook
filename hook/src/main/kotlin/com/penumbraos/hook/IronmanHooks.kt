@@ -29,6 +29,9 @@ object IronmanHooks {
         // crash-loops before ChannelFactory hooks ever get a chance to run.
         hookCredentialManager(cl)
 
+        // Work around Humane boot race between TouchpadActionManager and SystemModeService
+        TouchpadActionManagerHooks.install(cl)
+
         // Replace Humane's indefinite hand-tracking holds with a short,
         // configurable timeout that only starts from touchpad activity
         HandTrackingTimeoutHooks.install(cl)
