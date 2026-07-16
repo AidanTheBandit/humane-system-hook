@@ -12,8 +12,15 @@ dependencyResolutionManagement {
         mavenLocal()
         google()
         mavenCentral()
-        // ytm-kt (YouTube Music radio/recommendations) and its sh.syk transitives
-        maven { url = uri("https://maven.syk.sh") }
+        // ytm-kt (YouTube Music radio/recommendations) and its sh.syk transitives.
+        // Restrict resolution to just these groups so this repo can't shadow other deps.
+        maven {
+            url = uri("https://maven.syk.sh")
+            content {
+                includeGroup("dev.toastbits")
+                includeGroup("sh.syk")
+            }
+        }
         // Disabled due to being down
         // maven { url = uri("https://maven.aliucord.com/releases") }
     }

@@ -63,6 +63,11 @@ object MusicHooks {
     @Volatile private var currentTitle: String? = null
     @Volatile private var currentArtist: String? = null
 
+    // Spotify track durations in milliseconds, keyed by spotify: uri. The Humane MediaItem
+    // only carries whole-second duration, so we keep the exact ms here to size the WAV stream
+    // precisely (a round-trip through seconds truncates up to ~1s off the end of each track).
+    private val spotifyDurationMs = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     fun install(classLoader: ClassLoader) {
         cl = classLoader
         try {
@@ -109,8 +114,6 @@ object MusicHooks {
             hookMediaPlayerMetadata()
             registerShuffleReceiver()
             registerRepeatReceiver()
-            // Spike: prove this process can output PCM via AudioTrack (the librespot path).
-            SpotifyAudioSpike.install()
             // NOTE: librespot is now hosted in ironman (SpotifyControl) — the music process
             // is on-demand/dead so it couldn't reliably host it. Don't start it here too
             // (two instances = two "Ai Pin" Connect devices).
@@ -234,9 +237,12 @@ object MusicHooks {
                     // librespot stream (no NewPipe extraction). The ironman server does the
                     // Web-API play + sync when ExoPlayer connects to this URL.
                     if (id.startsWith("spotify:")) {
-                        val durSec = runCatching { mediaItemCls.getMethod("getDuration").invoke(item) as? Int }.getOrNull() ?: 0
-                        Log.w(TAG, "MusicHooks: playbackInfoForMediaItem id=$id -> Spotify stream (${durSec}s)")
-                        param.result = ioThenMain(Callable { buildPlaybackInfo(spotifyStreamUrl(id, durSec)) })
+                        // Prefer the exact ms captured at search time; fall back to the item's
+                        // whole-second duration (older/rebuilt items not in the map).
+                        val ms = spotifyDurationMs[id]
+                            ?: (runCatching { mediaItemCls.getMethod("getDuration").invoke(item) as? Int }.getOrNull()?.times(1000) ?: 0)
+                        Log.w(TAG, "MusicHooks: playbackInfoForMediaItem id=$id -> Spotify stream (${ms}ms)")
+                        param.result = ioThenMain(Callable { buildPlaybackInfo(spotifyStreamUrl(id, ms)) })
                         return
                     }
                     Log.w(TAG, "MusicHooks: playbackInfoForMediaItem id=$id -> NewPipe extract")
@@ -413,12 +419,14 @@ object MusicHooks {
         }
 
     /** MediaItem for a Spotify track — getId() carries the spotify: uri (resolved to a local stream URL). */
-    private fun spotifyMediaItem(t: SpotifyApi.Track): Any =
-        buildMediaItem(t.uri, t.title, t.artist, t.durationMs / 1000)
+    private fun spotifyMediaItem(t: SpotifyApi.Track): Any {
+        if (t.uri.isNotBlank() && t.durationMs > 0) spotifyDurationMs[t.uri] = t.durationMs
+        return buildMediaItem(t.uri, t.title, t.artist, t.durationMs / 1000)
+    }
 
-    /** ironman's local librespot WAV stream for [uri] (dur in ms drives the WAV Content-Length). */
-    private fun spotifyStreamUrl(uri: String, durSec: Int): String =
-        "http://127.0.0.1:${SpotifyControl.PORT}/t/${java.net.URLEncoder.encode(uri, "UTF-8")}?ms=${durSec * 1000}"
+    /** ironman's local librespot WAV stream for [uri] ([durationMs] drives the WAV Content-Length). */
+    private fun spotifyStreamUrl(uri: String, durationMs: Int): String =
+        "http://127.0.0.1:${SpotifyControl.PORT}/t/${java.net.URLEncoder.encode(uri, "UTF-8")}?ms=$durationMs"
 
     // ---- Bluetooth/AVRCP metadata: stamp title+artist onto the player's MediaItem ----
 

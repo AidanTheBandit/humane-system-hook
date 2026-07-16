@@ -45,7 +45,7 @@ object SpotifyApi {
         val id = cfg.optString("client_id"); val secret = cfg.optString("client_secret"); val rt = cfg.optString("refresh_token")
         if (id.isBlank() || secret.isBlank() || rt.isBlank()) return null
         return try {
-            val conn = URL("https://accounts.spotify.com/api/token").openConnection() as HttpURLConnection
+            val conn = open("https://accounts.spotify.com/api/token")
             conn.requestMethod = "POST"
             conn.setRequestProperty("Authorization", "Basic ${Base64.encodeToString("$id:$secret".toByteArray(), Base64.NO_WRAP)}")
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
@@ -62,7 +62,7 @@ object SpotifyApi {
     }
 
     private fun getJson(url: String, token: String): JSONObject {
-        val conn = URL(url).openConnection() as HttpURLConnection
+        val conn = open(url)
         conn.setRequestProperty("Authorization", "Bearer $token")
         val code = conn.responseCode
         val txt = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
@@ -147,7 +147,7 @@ object SpotifyApi {
 
     /** Start playback of [uri] on [deviceId]. */
     fun playUri(deviceId: String, uri: String): Boolean = withToken { token ->
-        val conn = URL("https://api.spotify.com/v1/me/player/play?device_id=${enc(deviceId)}").openConnection() as HttpURLConnection
+        val conn = open("https://api.spotify.com/v1/me/player/play?device_id=${enc(deviceId)}")
         conn.requestMethod = "PUT"
         conn.setRequestProperty("Authorization", "Bearer $token")
         conn.setRequestProperty("Content-Type", "application/json")
@@ -174,7 +174,7 @@ object SpotifyApi {
     private fun simplePost(url: String): Boolean = withToken { token -> method(url, "POST", token) } ?: false
 
     private fun method(url: String, m: String, token: String): Boolean {
-        val conn = URL(url).openConnection() as HttpURLConnection
+        val conn = open(url)
         conn.requestMethod = m
         conn.setRequestProperty("Authorization", "Bearer $token")
         if (m == "PUT" || m == "POST") { conn.doOutput = true; conn.outputStream.use { it.write(ByteArray(0)) } }
@@ -184,4 +184,14 @@ object SpotifyApi {
     }
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
+
+    private const val CONNECT_TIMEOUT_MS = 10_000
+    private const val READ_TIMEOUT_MS = 15_000
+
+    /** Open a connection with finite timeouts so a stalled endpoint can't hang the hook thread. */
+    private fun open(url: String): HttpURLConnection =
+        (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = READ_TIMEOUT_MS
+        }
 }

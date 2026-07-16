@@ -20,7 +20,8 @@ object VoiceConfig {
 
     private fun config(): JSONObject {
         val now = System.currentTimeMillis()
-        if (now - cachedAt < TTL_MS) return cache
+        // Range check so a backward clock jump (now < cachedAt) invalidates the cache.
+        if ((now - cachedAt) in 0 until TTL_MS) return cache
         cache = try {
             val f = File(PATH)
             if (f.exists()) JSONObject(f.readText()) else JSONObject()

@@ -57,9 +57,9 @@ object MusicIntentHook {
         "play some tunes", "play tunes", "play some songs", "play songs", "play something",
     )
     // Don't treat these as a song title ("play" with no/again etc.).
+    // ("play next/previous" variants are handled as controls below, not skipped.)
     private val SKIP = setOf(
         "play", "play it", "play that", "play again",
-        "play next", "play previous", "play the next song",
     )
 
     // Voice media controls -> native no-arg MUSIC actions. Only fire if no native
@@ -67,8 +67,8 @@ object MusicIntentHook {
     private val CONTROLS: Map<String, String> = buildMap {
         for (p in listOf("pause", "pause music", "pause the music", "pause song", "pause the song")) put(p, "PauseMusic")
         for (p in listOf("resume", "resume music", "unpause", "continue", "continue playing", "keep playing", "resume the music")) put(p, "ResumeMusic")
-        for (p in listOf("next", "next song", "next track", "skip", "skip song", "skip this", "skip this song", "skip track")) put(p, "NextTrack")
-        for (p in listOf("previous", "previous song", "previous track", "go back", "last song", "play the last song", "go back a song")) put(p, "PreviousTrack")
+        for (p in listOf("next", "next song", "next track", "skip", "skip song", "skip this", "skip this song", "skip track", "play next", "play the next song")) put(p, "NextTrack")
+        for (p in listOf("previous", "previous song", "previous track", "go back", "last song", "play the last song", "go back a song", "play previous", "play the previous song")) put(p, "PreviousTrack")
     }
 
     // "repeat (all/one/off)" -> broadcast to the music process (MediaManager.setRepeat).
@@ -120,45 +120,55 @@ object MusicIntentHook {
                         // Shuffle on/off -> broadcast to the music process; narrate confirmation.
                         val shuf = SHUFFLE[u]
                         if (shuf != null) {
-                            try {
+                            val ok = try {
                                 val ctx = Class.forName("android.app.ActivityThread")
                                     .getMethod("currentApplication").invoke(null) as? android.content.Context
-                                ctx?.sendBroadcast(
-                                    android.content.Intent("com.penumbraos.hook.SHUFFLE")
-                                        .setPackage("humane.experience.music")
-                                        .putExtra("on", shuf)
-                                )
+                                if (ctx == null) false
+                                else {
+                                    ctx.sendBroadcast(
+                                        android.content.Intent("com.penumbraos.hook.SHUFFLE")
+                                            .setPackage("humane.experience.music")
+                                            .putExtra("on", shuf)
+                                    )
+                                    true
+                                }
                             } catch (t: Throwable) {
-                                Log.e(TAG, "  shuffle broadcast failed: ${t.message}")
+                                Log.e(TAG, "  shuffle broadcast failed: ${t.message}"); false
                             }
-                            val sev = VoiceActions.narrate(cl, if (shuf) "Shuffle on." else "Shuffle off.") ?: return
+                            val msg = if (!ok) "Couldn't change shuffle."
+                                      else if (shuf) "Shuffle on." else "Shuffle off."
+                            val sev = VoiceActions.narrate(cl, msg) ?: return
                             param.result = sev
-                            Log.w(TAG, "MusicIntent: \"$u\" -> shuffle=$shuf")
+                            Log.w(TAG, "MusicIntent: \"$u\" -> shuffle=$shuf ok=$ok")
                             return
                         }
 
                         // Repeat one/all/off -> broadcast to the music process; narrate confirmation.
                         val rep = REPEAT[u]
                         if (rep != null) {
-                            try {
+                            val ok = try {
                                 val ctx = Class.forName("android.app.ActivityThread")
                                     .getMethod("currentApplication").invoke(null) as? android.content.Context
-                                ctx?.sendBroadcast(
-                                    android.content.Intent("com.penumbraos.hook.REPEAT")
-                                        .setPackage("humane.experience.music")
-                                        .putExtra("mode", rep)
-                                )
+                                if (ctx == null) false
+                                else {
+                                    ctx.sendBroadcast(
+                                        android.content.Intent("com.penumbraos.hook.REPEAT")
+                                            .setPackage("humane.experience.music")
+                                            .putExtra("mode", rep)
+                                    )
+                                    true
+                                }
                             } catch (t: Throwable) {
-                                Log.e(TAG, "  repeat broadcast failed: ${t.message}")
+                                Log.e(TAG, "  repeat broadcast failed: ${t.message}"); false
                             }
-                            val msg = when (rep) {
+                            val msg = if (!ok) "Couldn't change repeat." else when (rep) {
                                 "RepeatOne" -> "Repeating this song."
                                 "RepeatAll" -> "Repeat all."
                                 else -> "Repeat off."
                             }
                             val rev = VoiceActions.narrate(cl, msg) ?: return
                             param.result = rev
-                            Log.w(TAG, "MusicIntent: \"$u\" -> repeat=$rep")
+                            Log.w(TAG, "MusicIntent: \"$u\" -> repeat=$rep ok=$ok")
                             return
                         }
 

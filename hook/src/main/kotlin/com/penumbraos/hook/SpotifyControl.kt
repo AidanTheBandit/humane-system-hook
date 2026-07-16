@@ -32,6 +32,8 @@ object SpotifyControl {
     private const val SAMPLE_RATE = 44100
     private const val BYTES_PER_SEC = SAMPLE_RATE * 2 * 2   // 16-bit stereo
     private const val WAV_HEADER = 44
+    private const val HEADER_READ_TIMEOUT_MS = 15_000       // drop clients that stall mid-request
+    private const val MAX_TRACK_MS = 2L * 60 * 60 * 1000    // 2h cap: guards WAV sizing arithmetic
 
     @Volatile private var appCtx: Context? = null
     @Volatile private var proc: Process? = null
@@ -85,6 +87,8 @@ object SpotifyControl {
             SpotifyApi.readConfig()?.let { cfg -> runCatching { ensureLibrespotRunning(cfg) } }
             while (true) {
                 val sock = runCatching { ss.accept() }.getOrNull() ?: continue
+                // Finite header-read timeout so a stalled client thread releases instead of leaking.
+                runCatching { sock.soTimeout = HEADER_READ_TIMEOUT_MS }
                 Thread { runCatching { handle(sock) }.onFailure { Log.e(TAG, "  Spotify handle: ${it.message}") } }.start()
             }
         }.apply { isDaemon = true }.start()
@@ -117,7 +121,10 @@ object SpotifyControl {
             if (!path.startsWith("/t/")) { error(s, "404 Not Found"); return }
             val qIdx = path.indexOf('?')
             val uri = URLDecoder.decode(path.substring(3, if (qIdx >= 0) qIdx else path.length), "UTF-8")
-            val ms = if (qIdx >= 0) Regex("ms=(\\d+)").find(path.substring(qIdx))?.groupValues?.get(1)?.toLongOrNull() ?: 0L else 0L
+            // Only serve real Spotify track URIs (never feed an arbitrary string to playUri).
+            if (!uri.startsWith("spotify:track:")) { error(s, "404 Not Found"); return }
+            val ms = (if (qIdx >= 0) Regex("ms=(\\d+)").find(path.substring(qIdx))?.groupValues?.get(1)?.toLongOrNull() ?: 0L else 0L)
+                .coerceIn(0L, MAX_TRACK_MS)
             val rangeStart = Regex("(?i)Range:\\s*bytes=(\\d+)-").find(text)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
             Log.w(TAG, "  Spotify stream req: $uri (${ms}ms) range=$rangeStart")
 
@@ -172,8 +179,10 @@ object SpotifyControl {
             ensureLibrespotRunning(cfg)
             val device = SpotifyApi.waitForAiPin(6) ?: run { Log.e(TAG, "  Spotify: Ai Pin not online"); return false }
             Log.w(TAG, "  Spotify: device=$device, playUri $uri")
-            SpotifyApi.playUri(device, uri)
-            syncToTrack(uri)
+            // If the play command itself failed, don't buffer/mark-current — return false so the
+            // handler replies 503 and ExoPlayer retries (currentUri stays unset, preserving retry).
+            if (!SpotifyApi.playUri(device, uri)) { Log.e(TAG, "  Spotify: playUri failed for $uri"); return false }
+            syncToTrack(uri)   // best-effort: proceed on timeout (currently-playing legitimately lags)
 
             val pcm = if (ms > 0) (ms * BYTES_PER_SEC / 1000) and 3L.inv() else Long.MAX_VALUE / 2
             val nf = File(cacheDir(), "sp_${abs(uri.hashCode())}.wav")
