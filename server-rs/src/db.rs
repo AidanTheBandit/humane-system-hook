@@ -404,12 +404,6 @@ impl Database {
             if let Some(id) = existing_id {
                 // Merge into existing conversation.
                 tx.execute(
-                    "UPDATE conversations SET run_id = ?1, utterance = ?2, is_vision = ?3,
-                     created_at = strftime('%s', 'now') WHERE id = ?4",
-                    params![run_id, utterance, is_vision as i32, id],
-                )?;
-
-                tx.execute(
                     "DELETE FROM conversation_messages WHERE conversation_id = ?1",
                     params![id],
                 )?;
