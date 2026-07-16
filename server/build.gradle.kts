@@ -1,9 +1,16 @@
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.Sync
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_11)
+    }
 }
 
 val rustAbi = "arm64-v8a"
@@ -66,7 +73,7 @@ android {
     }
 
     namespace = "com.penumbraos.server"
-    compileSdk = 34
+    compileSdk = 35
 
     buildFeatures {
         buildConfig = true
@@ -113,10 +120,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    kotlinOptions {
-        jvmTarget = "11"
     }
 
     lint {
