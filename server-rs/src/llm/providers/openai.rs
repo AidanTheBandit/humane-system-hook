@@ -6,6 +6,7 @@ use tracing::info;
 
 use crate::config::ResolvedConfig;
 use crate::llm::backend::LlmBackend;
+use crate::llm::dumb_backend::DumbOpenAiBackend;
 use crate::llm::memory::MemoryService;
 use crate::llm::request_log::LlmRequestLogger;
 use crate::llm::rig_backend::RigBackend;
@@ -20,6 +21,14 @@ impl OpenAiProvider {
         memory: Option<MemoryService>,
     ) -> Result<Arc<dyn LlmBackend>, Box<dyn std::error::Error + Send + Sync>> {
         let llm_config = &config.config.llm;
+
+        // Default path: dumb single-shot completion.
+        // Hermès/Starlight owns the agent loop; Penumbra must not nest another one.
+        // Set llm.tools.enabled = true only if you deliberately want the local rig agent.
+        if !llm_config.tools.enabled {
+            return DumbOpenAiBackend::new(config, http_client, request_logger);
+        }
+
         let api_key = llm_config.resolve_api_key().ok_or(
             "OpenAI api_key not set; configure OPENAI_API_KEY in the environment or .env, or set llm.api_key in config.toml",
         )?;
@@ -32,7 +41,7 @@ impl OpenAiProvider {
         let client = builder.build()?;
 
         info!(
-            "OpenAI agent ready (model={}, custom_base={})",
+            "OpenAI agent ready (model={}, custom_base={}, tools=true)",
             llm_config.model,
             llm_config.base_url.is_some()
         );

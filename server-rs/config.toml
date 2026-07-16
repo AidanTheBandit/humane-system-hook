@@ -1,12 +1,15 @@
 [llm]
-provider = "gemini"          # "gemini", "anthropic", "openai", "openai-compatible", "echo"
-model = "gemini-2.5-flash"   # model ID for the provider
-# api_key = "..."            # optional, overrides env var
-# base_url = "..."           # optional, for openai-compatible providers
-# gemini_google_search = true # enable built-in Google Search grounding (Gemini only)
+provider = "openai-compatible"  # "gemini", "anthropic", "openai", "openai-compatible", "echo"
+model = "hermes-default"        # model ID for the provider
+# api_key = "..."               # optional, overrides env var
+# base_url = "..."              # optional, for openai-compatible providers
+# gemini_google_search = true   # enable built-in Google Search grounding (Gemini only)
 
 [llm.tools]
-enabled = true
+# Dumb mode (default): single-shot completion only. No local rig agent loop.
+# Hermes/Starlight owns tools + agent behavior. Set enabled=true only if you
+# deliberately want Penumbra's native tool loop.
+enabled = false
 # Tool embeddings use the model embedded into the server binary at build time.
 dynamic_tool_count = 8
 max_tool_turns = 5

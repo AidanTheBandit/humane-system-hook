@@ -260,7 +260,9 @@ fn default_model() -> String {
 }
 
 fn default_llm_tools_enabled() -> bool {
-    true
+    // Dumb by default: no local rig agent/tool loop.
+    // Hermes (via Starlight) owns agent behavior.
+    false
 }
 
 fn default_dynamic_tool_count() -> usize {
