@@ -34,6 +34,7 @@ use crate::llm::memory::MemoryService;
 use crate::llm::{LlmAgent, LlmRequestLogger, validate_prompt_template};
 use crate::nearby::NearbyClient;
 use crate::services::aibus::{AiBus, AiBusHanders};
+use crate::capture_broker::CaptureBroker;
 use crate::storage::{MediaStore, MemoryRecord};
 use device::{DeviceApi, DeviceVersionSnapshot};
 
@@ -71,6 +72,8 @@ pub struct ApiState {
     pub contact_client_reset_pending: Arc<AtomicBool>,
     /// Current device software and OS versions.
     pub device_versions: DeviceVersionSnapshot,
+    /// Live camera capture broker for Hermes/Starlight.
+    pub capture_broker: CaptureBroker,
 }
 
 // ─── Event types for the streaming endpoint ─────────────────────────
@@ -96,6 +99,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/memories/{uuid}/thumbnail/{index}", get(get_thumbnail))
         .route("/api/memories/{uuid}/files/{filename}", get(get_file))
         .route("/api/photos/latest", get(get_latest_photo_base64))
+        .route("/api/photos/wait", get(wait_for_live_photo))
+        .route("/api/photos/live/latest", get(get_live_photo_latest))
         .nest("/api", contacts::router())
         .route("/api/device", get(DeviceApi::get_device))
         .route("/api/settings", get(get_settings))
@@ -256,6 +261,67 @@ async fn get_latest_photo_base64(
         "byte_length": bytes.len(),
         "base64": b64,
         "data_url": format!("data:image/jpeg;base64,{b64}"),
+    })))
+}
+
+
+/// Wait for the next live camera frame published via AnalyzeImage.
+async fn wait_for_live_photo(
+    State(state): State<ApiState>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use base64::Engine as _;
+    use std::time::Duration;
+
+    let timeout_secs = query
+        .get("timeout_secs")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(25)
+        .clamp(1, 60);
+    let after = query
+        .get("after_generation")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let before = state.capture_broker.current_generation().await.max(after);
+    let img = state
+        .capture_broker
+        .wait_for_capture(before, Duration::from_secs(timeout_secs))
+        .await
+        .ok_or(StatusCode::GATEWAY_TIMEOUT)?;
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&img.bytes);
+    Ok(Json(serde_json::json!({
+        "request_id": img.request_id,
+        "question": img.question,
+        "generation": img.generation,
+        "mime": "image/jpeg",
+        "byte_length": img.bytes.len(),
+        "base64": b64,
+        "data_url": format!("data:image/jpeg;base64,{b64}"),
+        "source": "live_analyze_image",
+    })))
+}
+
+async fn get_live_photo_latest(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use base64::Engine as _;
+    let img = state
+        .capture_broker
+        .latest()
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&img.bytes);
+    Ok(Json(serde_json::json!({
+        "request_id": img.request_id,
+        "question": img.question,
+        "generation": img.generation,
+        "mime": "image/jpeg",
+        "byte_length": img.bytes.len(),
+        "base64": b64,
+        "data_url": format!("data:image/jpeg;base64,{b64}"),
+        "source": "live_analyze_image",
     })))
 }
 
@@ -1093,6 +1159,7 @@ async fn update_settings(
                 state.http_client.clone(),
                 state.db.clone(),
                 memory,
+                state.capture_broker.clone(),
             ));
             state.aibus.replace(new_aibus).await;
             state.dedup.clear().await;

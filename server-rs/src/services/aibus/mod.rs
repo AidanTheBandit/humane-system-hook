@@ -20,6 +20,7 @@ use crate::llm::LlmAgent;
 use crate::nearby::NearbyClient;
 use crate::proto::aibus::ai_bus_service_server::AiBusService;
 use crate::proto::aibus::*;
+use crate::capture_broker::CaptureBroker;
 use crate::synapse::image_store::LiveImageStore;
 
 mod completion;
@@ -45,6 +46,7 @@ impl AiBus {
         http_client: reqwest::Client,
         db: Database,
         memory: Option<MemoryService>,
+        capture_broker: CaptureBroker,
     ) -> Self {
         Self {
             handlers: Arc::new(RwLock::new(Arc::new(AiBusHanders::new(
@@ -54,6 +56,7 @@ impl AiBus {
                 http_client,
                 db,
                 memory,
+                capture_broker,
             )))),
         }
     }
@@ -358,6 +361,7 @@ impl AiBusHanders {
         http_client: reqwest::Client,
         db: Database,
         memory: Option<MemoryService>,
+        capture_broker: CaptureBroker,
     ) -> Self {
         let live_image_store = LiveImageStore::new();
 
@@ -369,7 +373,7 @@ impl AiBusHanders {
                 memory.clone(),
                 live_image_store.clone(),
             ),
-            vision: VisionHandler::new(live_image_store),
+            vision: VisionHandler::new(live_image_store, capture_broker),
             weather: WeatherHandler::new(
                 http_client.clone(),
                 config.pirate_weather_api_key.clone(),
