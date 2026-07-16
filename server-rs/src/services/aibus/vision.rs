@@ -7,15 +7,17 @@ use super::envelope::unwrap_plaintext_data;
 use crate::proto::aibus::*;
 use crate::proto::common::encryption::EncryptedData;
 use crate::synapse::extract_run_id;
+use crate::capture_broker::CaptureBroker;
 use crate::synapse::image_store::LiveImageStore;
 
 pub struct VisionHandler {
     image_store: LiveImageStore,
+    capture_broker: CaptureBroker,
 }
 
 impl VisionHandler {
-    pub fn new(image_store: LiveImageStore) -> Self {
-        Self { image_store }
+    pub fn new(image_store: LiveImageStore, capture_broker: CaptureBroker) -> Self {
+        Self { image_store, capture_broker }
     }
 
     #[allow(deprecated)]
@@ -59,8 +61,9 @@ impl VisionHandler {
 
         // Cache the captured image so a future Understand call can retrieve it and pass it to a LLM
         self.image_store.put(run_id, image_bytes.to_vec()).await;
+        self.capture_broker.publish(image_bytes.to_vec()).await;
 
-        info!(run_id = %run_id, "<<< AnalyzeImage stored image");
+        info!(run_id = %run_id, bytes = image_bytes.len(), "<<< AnalyzeImage stored image + published to CaptureBroker");
 
         Ok(AnalyzeImageResponse {
             observation: String::new(),

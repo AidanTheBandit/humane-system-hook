@@ -10,6 +10,9 @@ use tracing::{error, info};
 use crate::config::ResolvedConfig;
 use crate::llm::ChatResult;
 
+/// If the upstream model returns this exact sentinel, pin should open the camera.
+pub const DEFERRED_VISION_MARKER: &str = "__HUMANE_DEFERRED_VISION__";
+
 use super::backend::{LlmBackend, LlmFuture};
 use super::error::friendly_error_message;
 use super::prompt::PromptBuilder;
@@ -242,7 +245,15 @@ impl LlmBackend for DumbOpenAiBackend {
                                     .first()
                                     .and_then(|c| c.message.content.clone())
                                     .unwrap_or_default();
-                                Ok(ChatResult::Text(content))
+                                let trimmed = content.trim();
+                                if trimmed == DEFERRED_VISION_MARKER
+                                    || trimmed.contains(DEFERRED_VISION_MARKER)
+                                {
+                                    info!("upstream requested deferred vision");
+                                    Ok(ChatResult::DeferredVision)
+                                } else {
+                                    Ok(ChatResult::Text(content))
+                                }
                             }
                             Err(e) => {
                                 error!(

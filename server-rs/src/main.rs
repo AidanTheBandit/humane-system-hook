@@ -5,6 +5,7 @@
 //! HTTP PUT /upload/:uuid/:filename is handled by axum for media uploads.
 
 mod api;
+mod capture_broker;
 mod config;
 mod db;
 mod dedup;
@@ -404,6 +405,8 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     let log_dir_for_api: Option<PathBuf> = config.logging.log_dir.as_ref().map(PathBuf::from);
     let log_file_prefix_for_api: String = config.logging.file_prefix.clone();
 
+    let capture_broker = capture_broker::CaptureBroker::new();
+
     let aibus = AiBus::new(
         agent.clone(),
         resolved_config.clone(),
@@ -411,6 +414,7 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
         http_client.clone(),
         database.clone(),
         memory.clone(),
+        capture_broker.clone(),
     );
 
     // Build the gRPC service stack as a native axum::Router.
@@ -478,6 +482,7 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
         esim_bridge,
         contact_client_reset_pending: Arc::new(AtomicBool::new(false)),
         device_versions,
+        capture_broker,
     };
 
     // CORS layer for the web portal (public HTTPS → local HTTP via LNA).
