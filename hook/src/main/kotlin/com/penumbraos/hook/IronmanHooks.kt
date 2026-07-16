@@ -1,7 +1,10 @@
 package com.penumbraos.hook
 
 import android.app.Application
+import android.content.Intent
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import de.robv.android.xposed.XC_MethodHook
@@ -72,6 +75,16 @@ object IronmanHooks {
 
         // Bypass blocking IWlcService.disableTx binder calls
         WirelessChargingBypass.install(cl)
+
+        // Native "play <song>" recognition -> PlayMusic(Track=...) so it reaches the
+        // music experience (and our NewPipe provider) instead of the dead cloud path.
+        MusicIntentHook.install(cl)
+
+        // Spotify engine: runs librespot ("Ai Pin" Connect device) + a local HTTP WAV server
+        // (127.0.0.1:27089) that streams the current track's PCM. The music app's ExoPlayer
+        // plays that URL (MusicHooks returns it for spotify), so Spotify rides the native
+        // media pipeline (now-playing/queue/controls). No phone needed.
+        SpotifyControl.install(cl)
 
         Log.w(TAG, "Ironman hooks installed")
     }
@@ -184,6 +197,16 @@ object IronmanHooks {
                     } catch (t: Throwable) {
                         Log.e(TAG, "Provisioning fix failed", t)
                     }
+
+                    // Boot-persist the on-demand music experience hook: the injector's
+                    // boot mutation doesn't reliably take for processes that start
+                    // on-demand (music only starts when you say "play"), so ironman
+                    // (always hooked) fires the same INJECT the manual step does.
+                    try {
+                        scheduleHookInjects(app)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Hook-inject scheduling failed (non-fatal)", t)
+                    }
                 }
             })
             Log.w(TAG, "  Hooked MainApplication.onCreate() for provisioning fix")
@@ -216,6 +239,39 @@ object IronmanHooks {
             } catch (t2: Throwable) {
                 Log.e(TAG, "  Failed to hook Application.onCreate() fallback: ${t2.message}")
             }
+        }
+    }
+
+    /**
+     * Boot-persist the on-demand music experience hook. The injector's boot-time
+     * PMS mutation doesn't reliably take for packages that start ON DEMAND (the
+     * music experience only starts when you say "play") — only a fresh inject works.
+     * So ironman (which IS hooked at every boot) fires the same INJECT broadcast the
+     * manual step uses, a few seconds after boot, so no manual adb step is ever needed.
+     *
+     * InjectReceiver is exported with action com.penumbraos.hook.INJECT, so an
+     * explicit-component broadcast from ironman reaches it in system_server.
+     */
+    private fun scheduleHookInjects(app: Application) {
+        val targets = listOf("humane.experience.music")
+        val handler = Handler(Looper.getMainLooper())
+        for (delayMs in longArrayOf(12_000L, 45_000L)) {
+            handler.postDelayed({
+                for (pkg in targets) {
+                    try {
+                        val intent = Intent("com.penumbraos.hook.INJECT")
+                            .setClassName(
+                                "com.penumbraos.hook.injector",
+                                "com.penumbraos.hook.injector.InjectReceiver"
+                            )
+                            .putExtra("package", pkg)
+                        app.sendBroadcast(intent)
+                        Log.w(TAG, "Fired INJECT for $pkg (boot-persist on-demand hook)")
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "  INJECT broadcast for $pkg failed: ${t.message}")
+                    }
+                }
+            }, delayMs)
         }
     }
 

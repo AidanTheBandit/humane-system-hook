@@ -12,6 +12,8 @@ dependencyResolutionManagement {
         mavenLocal()
         google()
         mavenCentral()
+        // ytm-kt (YouTube Music radio/recommendations) and its sh.syk transitives
+        maven { url = uri("https://maven.syk.sh") }
         // Disabled due to being down
         // maven { url = uri("https://maven.aliucord.com/releases") }
     }
