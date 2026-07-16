@@ -95,6 +95,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/memories/{uuid}", delete(delete_memory))
         .route("/api/memories/{uuid}/thumbnail/{index}", get(get_thumbnail))
         .route("/api/memories/{uuid}/files/{filename}", get(get_file))
+        .route("/api/photos/latest", get(get_latest_photo_base64))
         .nest("/api", contacts::router())
         .route("/api/device", get(DeviceApi::get_device))
         .route("/api/settings", get(get_settings))
@@ -210,6 +211,52 @@ async fn get_file(
         .to_string();
 
     serve_file(&path, &content_type).await
+}
+
+/// Latest photo memory as JSON + base64 thumbnail for external agents (Hermes/Starlight).
+async fn get_latest_photo_base64(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use base64::Engine as _;
+
+    let store = state.store.lock().await;
+    let mut memories = store.list_memories().await;
+    memories.retain(|m| m.memory_type == "photo" && m.thumbnail_count > 0);
+    if memories.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    memories.sort_by(|a, b| {
+        let a_ts = a.created_at.parse::<i64>().unwrap_or(0);
+        let b_ts = b.created_at.parse::<i64>().unwrap_or(0);
+        b_ts.cmp(&a_ts)
+    });
+    let record = memories.remove(0);
+    let path = store
+        .base_dir()
+        .join(&record.uuid)
+        .join("thumbnail_0.jpg");
+    drop(store);
+
+    let bytes = tokio::fs::read(&path).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })?;
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(Json(serde_json::json!({
+        "uuid": record.uuid,
+        "created_at": record.created_at,
+        "status": record.status,
+        "location": record.location,
+        "thumbnail_count": record.thumbnail_count,
+        "mime": "image/jpeg",
+        "byte_length": bytes.len(),
+        "base64": b64,
+        "data_url": format!("data:image/jpeg;base64,{b64}"),
+    })))
 }
 
 async fn serve_file(path: &std::path::Path, content_type: &str) -> Result<Response, StatusCode> {
