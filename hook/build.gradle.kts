@@ -105,18 +105,8 @@ dependencies {
     implementation(files("libs/pipepipe-shaded.jar"))
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.0.4")
 
-    // ytm-kt — YouTube Music API (starts a real "song radio" queue for radio_autoplay,
-    // optionally personalized via an account cookie). Uses ktor's bundled CIO engine
-    // (no okhttp, so no clash with the shaded jar). EXCLUDE its transitive vanilla
-    // NewPipeExtractor: our shaded PipePipe jar already provides org.schabi.newpipe.extractor
-    // (un-relocated), and pulling a second copy would duplicate those classes.
-    implementation("dev.toastbits:ytm-kt:0.6.0") {
-        exclude(group = "com.github.teamnewpipe", module = "NewPipeExtractor")
-        // pipepipe-shaded.jar already bundles SLF4J. A second copy fails D8's
-        // duplicate-class check.
-        exclude(group = "org.slf4j", module = "slf4j-api")
-    }
-    // ytm-kt's suspend API is called from YtmRadio via runBlocking; coroutines is only a
-    // runtime (implementation) dep of ytm-kt, so declare it for our compile classpath too.
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Do not embed ytm-kt here. Its Android artifact brings the complete
+    // Compose/AndroidX UI graph into this injected APK and shadows Humane music's
+    // Media3 dependencies, crashing ExoPlayer. PipePipe provides search, playback,
+    // and related-stream radio without those classloader collisions.
 }
