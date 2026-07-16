@@ -188,9 +188,15 @@ object MusicHooks {
             m.isAccessible = true
             XposedBridge.hookMethod(m, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    val a = param.args.getOrNull(0) as? String ?: return
-                    val b = param.args.getOrNull(1) as? String ?: ""
-                    val query = "$a $b".trim()
+                    val a = cleanMusicQuery(param.args.getOrNull(0) as? String ?: return)
+                    val b = cleanMusicQuery(param.args.getOrNull(1) as? String ?: "")
+                    // Humane sometimes includes the artist in both arguments.
+                    val query = when {
+                        b.isBlank() -> a
+                        a.contains(b, ignoreCase = true) -> a
+                        b.contains(a, ignoreCase = true) -> b
+                        else -> "$a $b"
+                    }.trim()
                     Log.w(TAG, "MusicHooks: $methodName('$query') -> NewPipe")
                     param.result = buildCollectionQuery(query)
                 }
@@ -258,6 +264,7 @@ object MusicHooks {
     // ---- NewPipe ----
 
     private fun search(query: String): List<StreamInfoItem> {
+        val cleanedQuery = cleanMusicQuery(query)
         // PipePipe REQUIRES a content filter — its YoutubeFilters.evaluateSelectedFilters throws
         // "we have a problem here" if getSearchExtractor(query) is called with no filter selected
         // (vanilla NewPipe tolerated it). So pass a content FilterItem ("videos"/"music_songs").
@@ -265,13 +272,51 @@ object MusicHooks {
             // SoundCloud: the 1-arg getSearchExtractor injects a DEFAULT sort filter whose item
             // type isn't SoundcloudSortFilterItem -> ClassCastException in evaluateSelectedSortFilters
             // (SoundcloudFilters.java:117). Pass an explicit content filter + EMPTY sort list.
-            "soundcloud" -> NewPipe.getService(1).let { it.getSearchExtractor(query, contentFilter(it, "tracks", "all"), emptyList()) }
-            "youtube" -> youtube().let { it.getSearchExtractor("$query music", contentFilter(it, "videos", "all"), emptyList()) }
-            else -> youtube().let { it.getSearchExtractor(query, contentFilter(it, "music_songs", "videos", "all"), emptyList()) } // ytmusic
+            "soundcloud" -> NewPipe.getService(1).let { it.getSearchExtractor(cleanedQuery, contentFilter(it, "tracks", "all"), emptyList()) }
+            "youtube" -> youtube().let { it.getSearchExtractor("$cleanedQuery music", contentFilter(it, "videos", "all"), emptyList()) }
+            else -> youtube().let { it.getSearchExtractor(cleanedQuery, contentFilter(it, "music_songs", "videos", "all"), emptyList()) } // ytmusic
         }
         extractor.fetchPage()
-        return extractor.initialPage.items.filterIsInstance<StreamInfoItem>()
+        val results = extractor.initialPage.items.filterIsInstance<StreamInfoItem>()
+        return rankSearchResults(cleanedQuery, results)
     }
+
+    /** Repair common Pin speech errors and normalize whitespace before searching. */
+    private fun cleanMusicQuery(raw: String): String = raw
+        .replace(Regex("\\belectric high orchestra\\b", RegexOption.IGNORE_CASE), "electric light orchestra")
+        .replace(Regex("\\bbi\\b", RegexOption.IGNORE_CASE), "by")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+    /** Prefer exact requested title/artist over YouTube's default ranking. */
+    private fun rankSearchResults(query: String, results: List<StreamInfoItem>): List<StreamInfoItem> {
+        val tokens = normalizeSearchText(query)
+            .split(' ')
+            .filter { it.length > 1 && it !in setOf("by", "the", "music", "song", "track") }
+            .distinct()
+        if (tokens.isEmpty()) return results
+
+        val titleToken = tokens.first()
+        return results.withIndex().sortedWith(
+            compareByDescending<IndexedValue<StreamInfoItem>> { indexed ->
+                val item = indexed.value
+                val title = normalizeSearchText(item.name ?: "")
+                val haystack = "$title ${normalizeSearchText(item.uploaderName ?: "")}".trim()
+                val matched = tokens.count { token ->
+                    Regex("(?:^| )${Regex.escape(token)}(?: |$)").containsMatchIn(haystack)
+                }
+                matched * 20 +
+                    (if (matched == tokens.size) 100 else 0) +
+                    (if (Regex("(?:^| )${Regex.escape(titleToken)}(?: |$)").containsMatchIn(title)) 80 else 0)
+            }.thenBy { it.index }
+        ).map { it.value }
+    }
+
+    private fun normalizeSearchText(value: String): String = value
+        .lowercase()
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
     /** Resolve a search content filter by name (first match) from the service's filter set. */
     private fun contentFilter(service: StreamingService, vararg names: String): List<FilterItem> {

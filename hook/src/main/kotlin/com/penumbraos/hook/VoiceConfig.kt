@@ -44,10 +44,10 @@ object VoiceConfig {
         config().optInt("stream_quality", 2).coerceIn(0, 2)
     } catch (t: Throwable) { 2 }
 
-    /** Music search source: "youtube" (default), "ytmusic", "soundcloud", or "spotify". */
+    /** Music search source: "ytmusic" (default), "youtube", "soundcloud", or "spotify". */
     fun musicSource(): String = try {
-        config().optString("music_source", "youtube").lowercase()
-    } catch (t: Throwable) { "youtube" }
+        config().optString("music_source", "ytmusic").lowercase()
+    } catch (t: Throwable) { "ytmusic" }
 
     /** Set the music source (read-modify-write, preserving all other keys; invalidates cache). */
     fun setMusicSource(source: String): Boolean = try {
