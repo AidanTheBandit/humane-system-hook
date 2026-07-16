@@ -1,5 +1,6 @@
 mod agent;
 mod backend;
+mod dumb_backend;
 mod error;
 pub mod memory;
 mod prompt;
