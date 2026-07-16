@@ -62,6 +62,7 @@ object MusicHooks {
     // Bluetooth/AVRCP (car head unit) shows song info.
     @Volatile private var currentTitle: String? = null
     @Volatile private var currentArtist: String? = null
+    @Volatile private var currentDurationMs: Long = 0L
 
     // Spotify track durations in milliseconds, keyed by spotify: uri. The Humane MediaItem
     // only carries whole-second duration, so we keep the exact ms here to size the WAV stream
@@ -155,7 +156,12 @@ object MusicHooks {
     private fun ytmRadioItems(seedUrl: String): List<Any> {
         val videoId = youtubeVideoId(seedUrl) ?: return emptyList()
         return YtmRadio.radioForVideo(videoId).map {
-            buildMediaItem("https://www.youtube.com/watch?v=${it.videoId}", it.title, it.artist, 0)
+            buildMediaItem(
+                "https://www.youtube.com/watch?v=${it.videoId}",
+                it.title,
+                it.artist,
+                it.durationSec,
+            )
         }
     }
 
@@ -238,6 +244,8 @@ object MusicHooks {
                         currentTitle = mediaItemCls.getMethod("getTitle").invoke(item) as? String
                         @Suppress("UNCHECKED_CAST")
                         currentArtist = (mediaItemCls.getMethod("getArtistNames").invoke(item) as? List<String>)?.firstOrNull()
+                        currentDurationMs = ((mediaItemCls.getMethod("getDuration").invoke(item) as? Number)
+                            ?.toLong() ?: 0L).coerceAtLeast(0L) * 1000L
                     }
                     // Spotify: getId() is a spotify: uri -> play it on "Ai Pin" via the local
                     // librespot stream (no NewPipe extraction). The ironman server does the
@@ -492,7 +500,8 @@ object MusicHooks {
                     try {
                         val item = param.args.getOrNull(0) ?: return
                         val title = currentTitle ?: return
-                        withMetadata(item, title, currentArtist ?: "")?.let { param.args[0] = it }
+                        withMetadata(item, title, currentArtist ?: "", currentDurationMs)
+                            ?.let { param.args[0] = it }
                     } catch (t: Throwable) {
                         Log.e(TAG, "  metadata enrich failed: ${t.message}")
                     }
@@ -504,7 +513,7 @@ object MusicHooks {
         }
     }
 
-    private fun withMetadata(item: Any, title: String, artist: String): Any? {
+    private fun withMetadata(item: Any, title: String, artist: String, durationMs: Long): Any? {
         return try {
             val miCls = cl.loadClass("androidx.media3.common.MediaItem")
             val mmCls = cl.loadClass("androidx.media3.common.MediaMetadata")
@@ -512,10 +521,22 @@ object MusicHooks {
             val mmb = mmbCls.getConstructor().newInstance()
             mmbCls.getMethod("setTitle", CharSequence::class.java).invoke(mmb, title)
             if (artist.isNotEmpty()) mmbCls.getMethod("setArtist", CharSequence::class.java).invoke(mmb, artist)
+            // Humane's projected progress UI reads the MediaSession item's metadata.
+            // Without durationMs it treats extracted streams as unknown-length even though
+            // ExoPlayer eventually discovers the container duration internally.
+            if (durationMs > 0L) {
+                runCatching {
+                    mmbCls.getMethod("setDurationMs", java.lang.Long.TYPE).invoke(mmb, durationMs)
+                }.onFailure {
+                    Log.d(TAG, "  MediaMetadata.setDurationMs unavailable: ${it.message}")
+                }
+            }
             val mm = mmbCls.getMethod("build").invoke(mmb)
             val builder = miCls.getMethod("buildUpon").invoke(item)
             builder.javaClass.getMethod("setMediaMetadata", mmCls).invoke(builder, mm)
-            builder.javaClass.getMethod("build").invoke(builder)
+            builder.javaClass.getMethod("build").invoke(builder).also {
+                Log.w(TAG, "  media metadata: title='$title' artist='$artist' durationMs=$durationMs")
+            }
         } catch (t: Throwable) {
             Log.e(TAG, "  withMetadata failed: ${t.message}"); null
         }
