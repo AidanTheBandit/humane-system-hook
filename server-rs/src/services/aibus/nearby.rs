@@ -30,28 +30,47 @@ impl NearbySearchHandler {
             .ok_or_else(|| Status::invalid_argument("NearbySearchRequest missing location"))?;
         let lat = location.latitude;
         let lon = location.longitude;
-        let radius = if nearby_req.radius_accuracy > 0.0 {
-            nearby_req.radius_accuracy
+        let base_radius = if nearby_req.radius_accuracy > 0.0 {
+            nearby_req.radius_accuracy.max(3000.0)
         } else {
-            1000.0
+            3000.0
         };
 
         info!(
             lat = lat,
             lon = lon,
-            radius = radius,
+            radius = base_radius,
             query = %nearby_req.text_query,
             ">>> EncryptedNearbySearch"
         );
 
-        let nearby_places = self
-            .nearby_client
-            .search(lat, lon, radius, &nearby_req.text_query)
-            .await
-            .map_err(|e| {
-                tracing::warn!(error = %e, "Overpass nearby search failed");
-                Status::unavailable(format!("nearby search request failed: {e}"))
-            })?;
+        // Try progressively wider radii until we get results (3km, 5km, 10km, 20km, 50km).
+        // Rural areas can be very sparse in OSM; returning 0 places makes the native
+        // UI say "can't locate you".
+        let mut nearby_places = Vec::new();
+        for radius in [base_radius, 5000.0, 10_000.0, 20_000.0, 50_000.0] {
+            if radius < base_radius {
+                continue;
+            }
+            match self.nearby_client.search(lat, lon, radius, &nearby_req.text_query).await {
+                Ok(places) if !places.is_empty() => {
+                    nearby_places = places;
+                    info!(results = nearby_places.len(), radius, "<<< EncryptedNearbySearch (expanded)");
+                    break;
+                }
+                Ok(_) => {
+                    info!(radius, "0 results, expanding search radius");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, radius, "Overpass nearby search failed");
+                    // If it's an actual server error (not just empty), return unavailable
+                    // after the last attempt
+                    if radius >= 50_000.0 {
+                        return Err(Status::unavailable(format!("nearby search failed: {e}")));
+                    }
+                }
+            }
+        }
 
         let result_count = nearby_places.len();
         let nearby_response = NearbySearchResponse {

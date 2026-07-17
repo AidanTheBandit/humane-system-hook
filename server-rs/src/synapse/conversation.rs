@@ -6,6 +6,23 @@ use tracing::debug;
 use crate::proto::aibus::*;
 use crate::synapse::image_store::LiveImageStore;
 
+/// Return a stable identifier for the device conversation. The Pin preserves
+/// the first user turn across follow-ups, while each individual run gets a new
+/// `x-ai-mic-run-id`.
+pub fn extract_conversation_id(ctx: &SynapseDeviceContext, fallback_run_id: &str) -> String {
+    ctx.turns
+        .iter()
+        .find(|turn| {
+            !turn.identifier.is_empty()
+                && matches!(
+                    turn.content,
+                    Some(synapse_chat_turn::Content::UserRequest(_))
+                )
+        })
+        .map(|turn| turn.identifier.clone())
+        .unwrap_or_else(|| fallback_run_id.to_string())
+}
+
 /// Extract conversation history from device_context.turns into rig Messages,
 /// reconstructing each prior image-bearing user request as a single multimodal
 /// `Message::User` (text + image) keyed 1:1 to that turn's run-id
@@ -119,4 +136,41 @@ pub async fn extract_history(
 fn extract_respond_text(input: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(input).ok()?;
     parsed.get("Response")?.as_str().map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversation_id_uses_first_user_turn_identifier() {
+        let root = SynapseChatTurn {
+            identifier: "root-run".to_string(),
+            content: Some(synapse_chat_turn::Content::UserRequest(
+                SynapseUserRequestContent::default(),
+            )),
+            ..Default::default()
+        };
+        let current = SynapseChatTurn {
+            identifier: "current-run".to_string(),
+            content: Some(synapse_chat_turn::Content::UserRequest(
+                SynapseUserRequestContent::default(),
+            )),
+            ..Default::default()
+        };
+        let ctx = SynapseDeviceContext {
+            turns: vec![root, current],
+            ..Default::default()
+        };
+
+        assert_eq!(extract_conversation_id(&ctx, "fallback"), "root-run");
+    }
+
+    #[test]
+    fn conversation_id_falls_back_when_turn_identifiers_are_missing() {
+        assert_eq!(
+            extract_conversation_id(&SynapseDeviceContext::default(), "fallback-run"),
+            "fallback-run",
+        );
+    }
 }

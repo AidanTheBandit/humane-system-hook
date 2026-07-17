@@ -109,6 +109,7 @@ struct ConversationsQuery {
 pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/location", put(update_location))
         .route("/api/memories", get(list_memories))
         .route("/api/memories/{uuid}", get(get_memory))
         .route("/api/memories/{uuid}", delete(delete_memory))
@@ -166,6 +167,22 @@ async fn health(State(state): State<ApiState>) -> Json<serde_json::Value> {
         "name": name,
         "version": env!("PENUMBRA_VERSION"),
     }))
+}
+
+// ─── Location (pushed by hook) ──────────────────────────────────────
+
+#[derive(Deserialize)]
+struct LocationUpdate {
+    latitude: f64,
+    longitude: f64,
+    #[serde(default)]
+    accuracy: Option<f64>,
+}
+
+async fn update_location(Json(req): Json<LocationUpdate>) -> Json<serde_json::Value> {
+    let accuracy = req.accuracy.unwrap_or(50.0);
+    crate::services::aibus::geolocate::set_location(req.latitude, req.longitude, accuracy);
+    Json(serde_json::json!({"status": "ok", "latitude": req.latitude, "longitude": req.longitude, "accuracy": accuracy}))
 }
 
 // ─── Memories ───────────────────────────────────────────────────────

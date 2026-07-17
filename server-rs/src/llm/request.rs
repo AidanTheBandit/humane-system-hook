@@ -59,6 +59,7 @@ pub struct LlmChatRequest {
     pub templates: PromptTemplates,
     pub template_context: PromptTemplateContext,
     pub memory_context: Option<String>,
+    pub conversation_id: Option<String>,
 
     pub image: Option<Vec<u8>>,
 }
@@ -77,6 +78,7 @@ impl LlmChatRequest {
             templates,
             template_context,
             memory_context,
+            conversation_id: None,
             image: None,
         }
     }
@@ -84,6 +86,11 @@ impl LlmChatRequest {
     /// Attach an image asset to this request's new user turn
     pub fn with_image(mut self, image_bytes: Vec<u8>) -> Self {
         self.image = Some(image_bytes);
+        self
+    }
+
+    pub fn with_conversation_id(mut self, conversation_id: String) -> Self {
+        self.conversation_id = Some(conversation_id);
         self
     }
 }

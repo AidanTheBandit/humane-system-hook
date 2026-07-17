@@ -37,6 +37,8 @@ struct ChatCompletionRequest {
     messages: Vec<WireMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -212,6 +214,7 @@ impl LlmBackend for DumbOpenAiBackend {
                 model: self.model.clone(),
                 messages: Self::build_messages(&request),
                 temperature: Some(0.7),
+                conversation_id: request.conversation_id.clone(),
             };
 
             let url = format!("{}/chat/completions", self.base_url);
@@ -290,5 +293,23 @@ impl LlmBackend for DumbOpenAiBackend {
 
             result
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completion_request_serializes_conversation_id() {
+        let body = ChatCompletionRequest {
+            model: "hermes-default".to_string(),
+            messages: Vec::new(),
+            temperature: None,
+            conversation_id: Some("root-run".to_string()),
+        };
+
+        let json = serde_json::to_value(body).unwrap();
+        assert_eq!(json["conversation_id"], "root-run");
     }
 }

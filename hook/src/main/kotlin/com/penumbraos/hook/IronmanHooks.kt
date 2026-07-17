@@ -86,6 +86,10 @@ object IronmanHooks {
         // media pipeline (now-playing/queue/controls). No phone needed.
         SpotifyControl.install(cl)
 
+        // Push GPS location to the server so the native Nearby button and
+        // GeoLocate gRPC handler return real coordinates.
+        LocationPusher.start()
+
         Log.w(TAG, "Ironman hooks installed")
     }
 
