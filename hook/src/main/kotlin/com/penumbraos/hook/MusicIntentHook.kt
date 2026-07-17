@@ -11,7 +11,7 @@ import java.lang.reflect.Method
  * ("I'm an AI assistant, I can't play music"), so it never reaches the music
  * experience or our NewPipe provider (MusicHooks).
  *
- * We after-hook RegexInterpreter.interpret and, when nothing else matched, emit a
+ * We before-hook RegexInterpreter.interpret for explicit music commands and emit a
  * native PlayMusicAction with the Track field set (nameForModel="Track" ->
  * PlayMusic.track() -> MediaManagerPlayMediaResolver -> queryWithTrackName, which
  * MusicHooks intercepts in the music process and serves from NewPipe/YouTube).
@@ -99,9 +99,8 @@ object MusicIntentHook {
             interpret.isAccessible = true
 
             XposedBridge.hookMethod(interpret, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
+                override fun beforeHookedMethod(param: MethodHookParam) {
                     try {
-                        if (param.result != null) return   // let native results win
                         val events = param.args.getOrNull(0) ?: return
                         val interpreter = param.thisObject ?: return
                         val raw = normalizedUtterance(interpreter, events) ?: return
@@ -235,7 +234,7 @@ object MusicIntentHook {
                         }
 
                         if (u in SKIP) return
-                        val song = matchPlay(u) ?: return
+                        val song = classifyTrackCommand(u) ?: return
                         val out = VoiceActions.events(cl, "PlayMusic", mapOf("Track" to song)) ?: return
                         param.result = out
                         Log.w(TAG, "MusicIntent: \"$u\" -> PlayMusic(Track='$song')")
@@ -294,6 +293,12 @@ object MusicIntentHook {
             if (song.isNotEmpty() && song !in SKIP) return song
         }
         return null
+    }
+
+    internal fun classifyTrackCommand(raw: String): String? {
+        val normalized = raw.lowercase().trim().trimEnd('.', '?', '!').trim()
+        if (normalized.isEmpty() || normalized in SKIP) return null
+        return matchPlay(normalized)
     }
 
     private fun normalizedUtterance(interpreter: Any, events: Any): String? {
