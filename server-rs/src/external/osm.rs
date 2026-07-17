@@ -5,7 +5,14 @@ use serde::Serialize;
 
 const OSM_USER_AGENT: &str = "PenumbraOS/0.1";
 const NOMINATIM_REVERSE_URL: &str = "https://nominatim.openstreetmap.org/reverse";
-const OVERPASS_API_URL: &str = "https://overpass-api.de/api/interpreter";
+
+/// Overpass API mirrors, tried in order. The main instance (overpass-api.de)
+/// is frequently overloaded with "too busy" errors.
+const OVERPASS_MIRRORS: &[&str] = &[
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+];
 
 /// OpenStreetMap API client.
 #[derive(Clone)]
@@ -17,6 +24,7 @@ pub struct OsmClient {
 pub enum OsmError {
     HttpRequest(reqwest::Error),
     ParseResponse(reqwest::Error),
+    AllMirrorsFailed(String),
 }
 
 impl std::fmt::Display for OsmError {
@@ -24,6 +32,7 @@ impl std::fmt::Display for OsmError {
         match self {
             Self::HttpRequest(e) => write!(f, "OSM HTTP request failed: {e}"),
             Self::ParseResponse(e) => write!(f, "OSM response parse failed: {e}"),
+            Self::AllMirrorsFailed(msg) => write!(f, "All Overpass mirrors failed: {msg}"),
         }
     }
 }
@@ -61,7 +70,19 @@ impl OsmClient {
     }
 
     pub async fn overpass(&self, query: &str) -> Result<serde_json::Value, OsmError> {
-        execute_osm_request(self.http.post(OVERPASS_API_URL).form(&[("data", query)])).await
+        let mut last_err = None;
+        for mirror in OVERPASS_MIRRORS {
+            match execute_osm_request(self.http.post(*mirror).form(&[("data", query)])).await {
+                Ok(json) => return Ok(json),
+                Err(e) => {
+                    tracing::warn!("Overpass mirror {} failed: {}", mirror, e);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| OsmError::AllMirrorsFailed(
+            "no overpass mirrors configured".to_string()
+        )))
     }
 }
 

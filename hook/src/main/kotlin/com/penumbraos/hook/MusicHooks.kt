@@ -64,6 +64,11 @@ object MusicHooks {
     @Volatile private var currentArtist: String? = null
     @Volatile private var currentDurationMs: Long = 0L
 
+    // Track whether we've announced the first track of the current play session.
+    // Reset when a new collection query starts, set when the first track plays.
+    @Volatile private var pendingAnnounceTitle: String? = null
+    private var announceTts: android.speech.tts.TextToSpeech? = null
+
     // Spotify track durations in milliseconds, keyed by spotify: uri. The Humane MediaItem
     // only carries whole-second duration, so we keep the exact ms here to size the WAV stream
     // precisely (a round-trip through seconds truncates up to ~1s off the end of each track).
@@ -113,8 +118,10 @@ object MusicHooks {
             hookNoArgQuery(provider, "queryFeaturedPlaylist", "top hits this week")
             hookPlayback(provider)
             hookMediaPlayerMetadata()
+            hookProgressUpdate()
             registerShuffleReceiver()
             registerRepeatReceiver()
+            initAnnounceTts()
             // NOTE: librespot is now hosted in ironman (SpotifyControl) — the music process
             // is on-demand/dead so it couldn't reliably host it. Don't start it here too
             // (two instances = two "Ai Pin" Connect devices).
@@ -242,6 +249,8 @@ object MusicHooks {
                         currentDurationMs = ((mediaItemCls.getMethod("getDuration").invoke(item) as? Number)
                             ?.toLong() ?: 0L).coerceAtLeast(0L) * 1000L
                     }
+                    // Announce the first track of a play session ("Now playing X").
+                    if (pendingAnnounceTitle != null) announceFirstTrack()
                     // Spotify: getId() is a spotify: uri -> play it on "Ai Pin" via the local
                     // librespot stream (no NewPipe extraction). The ironman server does the
                     // Web-API play + sync when ExoPlayer connects to this URL.
@@ -420,6 +429,11 @@ object MusicHooks {
                         search(query).take(25).map { buildMediaItem(it) }
                     }
                     Log.w(TAG, "  collection '$query' -> ${items.size} tracks")
+                    // Set the first track for "Now playing" announcement.
+                    if (items.isNotEmpty()) {
+                        val firstTitle = mediaItemCls.getMethod("getTitle").invoke(items[0]) as? String
+                        pendingAnnounceTitle = firstTitle
+                    }
                     mediaItemCollectionCtor.newInstance(items)
                 })
                 "hashCode" -> System.identityHashCode(proxy)
@@ -440,6 +454,9 @@ object MusicHooks {
                     val q = rawQuery.removePrefix("radio:").trim()
                     val tracks = SpotifyApi.searchTracks(q, 25)
                     Log.w(TAG, "  Spotify collection '$q' -> ${tracks.size} tracks")
+                    if (tracks.isNotEmpty()) {
+                        pendingAnnounceTitle = tracks.first().title
+                    }
                     mediaItemCollectionCtor.newInstance(tracks.map { spotifyMediaItem(it) })
                 })
                 "hashCode" -> System.identityHashCode(proxy)
@@ -534,6 +551,134 @@ object MusicHooks {
             }
         } catch (t: Throwable) {
             Log.e(TAG, "  withMetadata failed: ${t.message}"); null
+        }
+    }
+
+    /**
+     * Fix the progress bar by hooking ExoPlayer's Player.Listener.onEvents to
+     * update the MediaSession PlaybackState with the real position+duration.
+     *
+     * Humane's projected progress UI tracks the elapsed time independently (which
+     * is why it moves) but the bar itself needs PlaybackState with position to
+     * know where to draw. We periodically push position updates.
+     */
+    private fun hookProgressUpdate() {
+        try {
+            // Hook MediaManager's play/next callbacks to push the current position.
+            // ExoPlayer is inside the music process and we already have its classloader.
+            val playerCls = cl.loadClass("androidx.media3.exoplayer.ExoPlayer")
+            // Use a Handler on the main thread to poll position
+            val main = Handler(Looper.getMainLooper())
+            val poller = object : Runnable {
+                override fun run() {
+                    try {
+                        // Find the ExoPlayer instance through MediaManager
+                        val mmCls = cl.loadClass("humane.experience.music.playback.MediaManager")
+                        val mm = mmCls.getMethod("sharedInstance").invoke(null) ?: return
+                        // Get the player field
+                        val playerField = mmCls.declaredFields.firstOrNull {
+                            playerCls.isAssignableFrom(it.type)
+                        }
+                        if (playerField != null) {
+                            playerField.isAccessible = true
+                            val player = playerField.get(mm) ?: return
+                            val duration = playerCls.getMethod("getDuration").invoke(player) as Long
+                            val pos = playerCls.getMethod("getCurrentPosition").invoke(player) as Long
+                            val isPlaying = playerCls.getMethod("isPlaying").invoke(player) as Boolean
+                            if (duration > 0 && isPlaying) {
+                                updatePlaybackState(player, pos, duration)
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        // Quietly — the player may not be ready yet
+                    }
+                    main.postDelayed(this, 1000)
+                }
+            }
+            main.postDelayed(poller, 2000)
+            Log.w(TAG, "  Hooked progress polling (1s interval)")
+        } catch (t: Throwable) {
+            Log.e(TAG, "  hookProgressUpdate failed: ${t.message}")
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun updatePlaybackState(player: Any, positionMs: Long, durationMs: Long) {
+        try {
+            // Build a PlaybackStateCompat for the MediaSession
+            val pscCls = cl.loadClass("android.support.v4.media.session.PlaybackStateCompat")
+            val builderCls = cl.loadClass("android.support.v4.media.session.PlaybackStateCompat\$Builder")
+            val builder = builderCls.getConstructor().newInstance()
+            val statePlaying = pscCls.getField("STATE_PLAYING").getInt(null)
+            builderCls.getMethod("setState", java.lang.Integer.TYPE, java.lang.Long.TYPE, java.lang.Float.TYPE)
+                .invoke(builder, statePlaying, positionMs, 1.0f)
+            builderCls.getMethod("setBufferedPosition", java.lang.Long.TYPE)
+                .invoke(builder, durationMs)
+            val actions = pscCls.getField("ACTION_PLAY").getLong(null) or
+                pscCls.getField("ACTION_PAUSE").getLong(null) or
+                pscCls.getField("ACTION_SEEK_TO").getLong(null) or
+                pscCls.getField("ACTION_PLAY_PAUSE").getLong(null)
+            builderCls.getMethod("setActions", java.lang.Long.TYPE).invoke(builder, actions)
+            val state = builderCls.getMethod("build").invoke(builder)
+
+            // Try to get the MediaSession from the player's MediaSessionHelper or equivalent
+            val mmCls = cl.loadClass("humane.experience.music.playback.MediaManager")
+            val mm = mmCls.getMethod("sharedInstance").invoke(null)
+            // Look for a MediaSession field
+            val sessionField = mmCls.declaredFields.firstOrNull { f ->
+                f.type.name.contains("MediaSession") || f.type.name.contains("Session")
+            }
+            if (sessionField != null) {
+                sessionField.isAccessible = true
+                val session = sessionField.get(mm)
+                session?.let {
+                    // Try setPlaybackState (MediaSessionCompat)
+                    val setMethod = it.javaClass.methods.firstOrNull { m ->
+                        m.name == "setPlaybackState" && m.parameterTypes.isNotEmpty()
+                    }
+                    setMethod?.invoke(it, state)
+                }
+            }
+        } catch (t: Throwable) {
+            // Expected if MediaSession structure differs
+        }
+    }
+
+    // ---- "Now playing" announcement (first track only) ----
+
+    private fun initAnnounceTts() {
+        try {
+            val ctx = Class.forName("android.app.ActivityThread")
+                .getMethod("currentApplication").invoke(null) as? android.content.Context
+            if (ctx == null) {
+                // Retry until context is available
+                val main = Handler(Looper.getMainLooper())
+                main.postDelayed({ initAnnounceTts() }, 2000)
+                return
+            }
+            announceTts = android.speech.tts.TextToSpeech(ctx) { status ->
+                if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+                    announceTts?.language = java.util.Locale.US
+                    Log.w(TAG, "  Announce TTS ready")
+                }
+            }
+            Log.w(TAG, "  Init announce TTS")
+        } catch (t: Throwable) {
+            Log.e(TAG, "  initAnnounceTts failed: ${t.message}")
+        }
+    }
+
+    private fun announceFirstTrack() {
+        val title = pendingAnnounceTitle ?: return
+        pendingAnnounceTitle = null // Only announce once per session
+        try {
+            val tts = announceTts ?: return
+            val artist = currentArtist?.takeIf { it.isNotBlank() }
+            val msg = if (artist != null) "Now playing $title by $artist" else "Now playing $title"
+            tts.speak(msg, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "penumbra_music_announce")
+            Log.w(TAG, "  Announced: $msg")
+        } catch (t: Throwable) {
+            Log.e(TAG, "  announce failed: ${t.message}")
         }
     }
 

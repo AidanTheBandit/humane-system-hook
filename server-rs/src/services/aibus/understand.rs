@@ -13,12 +13,12 @@ use std::sync::Arc;
 use super::envelope::unwrap_plaintext_data;
 use crate::config::ResolvedConfig;
 use crate::db::Database;
-use crate::llm::ChatResult;
 use crate::llm::memory::MemoryService;
+use crate::llm::ChatResult;
 use crate::llm::{LlmAgent, LlmChatRequest, PromptTemplateContext, PromptTemplates};
 use crate::proto::aibus::*;
 use crate::proto::common::encryption::{self, EncryptedData};
-use crate::synapse::conversation::extract_history;
+use crate::synapse::conversation::{extract_conversation_id, extract_history};
 use crate::synapse::extract_run_id;
 use crate::synapse::image_store::LiveImageStore;
 use crate::synapse::vision::{extract_most_recent_image_data, is_vision_request};
@@ -137,13 +137,21 @@ impl UnderstandHandler {
             None
         };
 
+        let conversation_id = req
+            .device_context
+            .as_ref()
+            .map(|ctx| extract_conversation_id(ctx, run_id))
+            .unwrap_or_else(|| run_id.to_string());
+        info!(run_id = %run_id, conversation_id = %conversation_id, "routing LLM conversation");
+
         let mut chat_request = LlmChatRequest::new(
             utterance.to_string(),
             history.to_vec(),
             templates,
             template_context,
             memory_context,
-        );
+        )
+        .with_conversation_id(conversation_id);
 
         if let Some(image_bytes) = image {
             chat_request = chat_request.with_image(image_bytes);

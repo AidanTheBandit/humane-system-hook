@@ -25,7 +25,7 @@ use crate::synapse::image_store::LiveImageStore;
 
 mod completion;
 mod envelope;
-mod geolocate;
+pub mod geolocate;
 mod nearby;
 mod reverse_geocode;
 mod stubs;
