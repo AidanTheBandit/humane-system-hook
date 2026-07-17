@@ -95,6 +95,7 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     implementation("com.aliucord:Aliuhook:1.1.4")
     // PipePipe extractor (NewPipe fork) — extracts YouTube/SoundCloud stream URLs without a
     // po_token (uses ANDROID_VR/iOS/tvHTML5 innertube clients), which vanilla NewPipe can't do
