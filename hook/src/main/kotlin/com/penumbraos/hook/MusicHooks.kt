@@ -148,14 +148,9 @@ object MusicHooks {
         return null
     }
 
-    /**
-     * Real YouTube Music radio for [seedUrl] (a YouTube watch URL), as MediaItems.
-     * Empty when the seed isn't a YouTube track or YTM returns nothing — callers then
-     * fall back to NewPipe related streams. Runs on the caller's IO worker.
-     */
-    private fun ytmRadioItems(seedUrl: String): List<Any> {
-        val videoId = youtubeVideoId(seedUrl) ?: return emptyList()
-        return YtmRadio.radioForVideo(videoId).map {
+    /** Real YTM catalogue search + automix radio, converted to Humane MediaItems. */
+    private fun ytmRadioItems(query: String): List<Any> {
+        return YtmRadio.radioForQuery(query).map {
             buildMediaItem(
                 "https://www.youtube.com/watch?v=${it.videoId}",
                 it.title,
@@ -403,15 +398,15 @@ object MusicHooks {
             when (method.name) {
                 "collection" -> ioThenMain(Callable {
                     val items = if (query.startsWith("radio:")) {
-                        // Radio seeded by a named song: play it, then a real YTM radio queue
-                        // (fall back to NewPipe related streams if YTM has nothing).
+                        // YTM chooses the exact seed from its song catalogue, then creates its
+                        // own automix queue and continuations. NewPipe is only the fallback.
                         val seed = query.removePrefix("radio:").trim()
-                        val first = search(seed).firstOrNull()
-                        val firstItem = first?.let { buildMediaItem(it) }
-                        val ytm = first?.let { ytmRadioItems(it.url) } ?: emptyList()
+                        val ytm = ytmRadioItems(seed)
                         if (ytm.isNotEmpty()) {
-                            (listOfNotNull(firstItem) + ytm).take(30)
+                            ytm.take(50)
                         } else {
+                            val first = search(seed).firstOrNull()
+                            val firstItem = first?.let { buildMediaItem(it) }
                             val related = first?.let {
                                 val u = normalizeUrl(it.url)
                                 runCatching {
